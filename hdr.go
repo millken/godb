@@ -7,7 +7,7 @@ const (
 /*
 * hdr format:
 +----------+---------------+---------------+---------------+
-| flag(1B) |  keySize (1B) | chunkSize (4B)|  checksum (4B)|
+| flag(1B) |  keySize (1B) | valueSize (4B)|  checksum (4B)|
 +----------+---------------+---------------+---------------+
 *
 */

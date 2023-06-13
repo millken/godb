@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 type benchmarkTestCase struct {
@@ -17,12 +19,11 @@ type benchmarkTestCase struct {
 }
 
 func TestTable(t *testing.T) {
+	require := require.New(t)
 	name, clean := mustTempFile()
 	defer clean()
 	tbl, err := OpenTable(name)
-	if err != nil {
-		t.Fatalf("failed to open table: %v", err)
-	}
+	require.NoError(err)
 	defer tbl.Close()
 	tests := []struct {
 		name string

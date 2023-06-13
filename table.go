@@ -3,10 +3,8 @@ package godb
 import (
 	"errors"
 	"hash/crc32"
-	"os"
 
 	art "github.com/WenyXu/sync-adaptive-radix-tree"
-	"github.com/tidwall/bfile"
 )
 
 var (
@@ -17,9 +15,7 @@ var (
 )
 
 type Table struct {
-	file               *os.File
-	pager              *bfile.Pager
-	writer             *bfile.Stream
+	storage            Storage
 	indexer            art.Tree[*index]
 	close              bool
 	currentBlockNumber uint32
@@ -27,21 +23,12 @@ type Table struct {
 }
 
 func OpenTable(filename string) (*Table, error) {
-	fd, err := os.OpenFile(
-		filename,
-		os.O_CREATE|os.O_RDWR,
-		fileModePerm,
-	)
-
-	if err != nil {
-		return nil, err
-	}
-	pager := bfile.NewPager(fd)
+	var err error
 	t := &Table{
-		file:    fd,
-		pager:   pager,
-		writer:  pager.Stream(0),
 		indexer: art.Tree[*index]{},
+	}
+	if t.storage, err = newFileStorage(filename); err != nil {
+		return nil, err
 	}
 	return t, nil
 }
@@ -113,12 +100,12 @@ func (t *Table) writeChunk(key, chunk []byte, flag flag) error {
 		})
 	}
 	n := uint32(0)
-	hn, err := t.writer.Write(h[:])
+	hn, err := t.storage.Write(h[:])
 	if err != nil {
 		return err
 	}
 	n += uint32(hn)
-	dn, err := t.writer.Write(chunk)
+	dn, err := t.storage.Write(chunk)
 	if err != nil {
 		return err
 	}
@@ -152,7 +139,7 @@ func (t *Table) readBlock(num uint32) ([]byte, uint32, error) {
 	}
 	off := int64(num * blockSize)
 	blk := make([]byte, sz)
-	if _, err := t.pager.ReadAt(blk, off); err != nil {
+	if _, err := t.storage.ReadAt(blk, off); err != nil {
 		return nil, 0, err
 	}
 	return blk, sz, nil
@@ -223,5 +210,5 @@ func (t *Table) Close() error {
 		return nil
 	}
 	t.close = true
-	return t.file.Close()
+	return t.storage.Close()
 }
