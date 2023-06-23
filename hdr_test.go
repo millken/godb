@@ -23,18 +23,18 @@ func TestUnsafe(t *testing.T) {
 
 func TestHdr(t *testing.T) {
 	h := hdr{}
-	h.setFlag(flagEntryPut | flagChunkFirst | flagChunkLast)
+	h.setFlag(flagPut)
 	h.setKeySize(100)
-	h.setChunkSize(1000)
+	h.setValueSize(1000)
 	h.setChecksum(10000)
-	if !h.getFlag().IsEntryPut() {
+	if !h.getFlag().isPut() {
 		t.Fatalf("expect flagEntryPut, got %v", h.getFlag())
 	}
 	if h.getKeySize() != 100 {
 		t.Fatalf("expect 100, got %v", h.getKeySize())
 	}
-	if h.getChunkSize() != 1000 {
-		t.Fatalf("expect 1000, got %v", h.getChunkSize())
+	if h.getValueSize() != 1000 {
+		t.Fatalf("expect 1000, got %v", h.getValueSize())
 	}
 	if h.getChecksum() != 10000 {
 		t.Fatalf("expect 10000, got %v", h.getChecksum())
@@ -44,9 +44,9 @@ func TestHdr(t *testing.T) {
 func BenchmarkHdrSet(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		h := hdr{}
-		h.setFlag(flagEntryPut)
+		h.setFlag(flagPut)
 		h.setKeySize(100)
-		h.setChunkSize(1000)
+		h.setValueSize(1000)
 		h.setChecksum(10000)
 	}
 }
@@ -56,7 +56,7 @@ func BenchmarkHdrGet(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		h.getFlag()
 		h.getKeySize()
-		h.getChunkSize()
+		h.getValueSize()
 		h.getChecksum()
 	}
 }

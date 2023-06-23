@@ -32,11 +32,11 @@ func (h *hdr) setKeySize(size uint8) *hdr {
 	return h
 }
 
-func (h *hdr) getChunkSize() uint32 {
+func (h *hdr) getValueSize() uint32 {
 	return uint32((*h)[2]) | uint32((*h)[3])<<8 | uint32((*h)[4])<<16 | uint32((*h)[5])<<24
 }
 
-func (h *hdr) setChunkSize(size uint32) *hdr {
+func (h *hdr) setValueSize(size uint32) *hdr {
 	(*h)[2] = byte(size)
 	(*h)[3] = byte(size >> 8)
 	(*h)[4] = byte(size >> 16)
@@ -54,4 +54,30 @@ func (h *hdr) setChecksum(checksum uint32) *hdr {
 	(*h)[8] = byte(checksum >> 16)
 	(*h)[9] = byte(checksum >> 24)
 	return h
+}
+
+func (h *hdr) isValid() bool {
+	return h.getFlag().isValid() && h.getKeySize() > 0 && h.getValueSize() > 0
+}
+
+func (h *hdr) dataSize() uint32 {
+	return uint32(h.getKeySize()) + h.getValueSize()
+}
+
+func (h *hdr) entrySize() uint32 {
+	return hdrSize + h.dataSize()
+}
+
+type index uint64
+
+func newIndex(seg uint16, off uint32) index {
+	return index(uint64(seg)<<32 | uint64(off))
+}
+
+func (i index) segment() uint16 {
+	return uint16(i >> 32)
+}
+
+func (i index) offset() uint32 {
+	return uint32(i)
 }
