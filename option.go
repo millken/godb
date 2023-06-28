@@ -14,6 +14,12 @@ type option struct {
 	fsync bool
 }
 
+func defaultOption() *option {
+	return &option{
+		fsync: false,
+	}
+}
+
 func FsyncOption(fsync bool) Option {
 	return func(db *option) error {
 		db.fsync = fsync

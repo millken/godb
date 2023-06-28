@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sync"
 
 	art "github.com/WenyXu/sync-adaptive-radix-tree"
 	"github.com/pkg/errors"
@@ -28,6 +29,7 @@ type DB struct {
 	opts     *option
 	segments []*segment
 	idx      *art.Tree[index]
+	mu       sync.Mutex
 }
 
 // Open opens a database at the given path.
@@ -48,13 +50,17 @@ func Open(path string, options ...Option) (*DB, error) {
 		}
 		segments = append(segments, name)
 	}
+	opts := defaultOption()
+	for _, opt := range options {
+		if err := opt(opts); err != nil {
+			return nil, errors.Wrap(err, "Invalid option")
+		}
+	}
 	db := &DB{
 		path: path,
+		opts: opts,
+		idx:  &art.Tree[index]{},
 	}
-
-	// blockNumber := uint32(offset / blockSize)
-	// blockOffset := offset % blockSize
-
 	return db, nil
 }
 
@@ -77,14 +83,39 @@ func (db *DB) Put(key, value []byte) error {
 	return db.set(key, value)
 }
 
-func (db *DB) createSegment() (*segment, error) {
+// Get gets the value of the key from the db
+func (db *DB) Get(key []byte) ([]byte, error) {
+	if err := validateKey(key); err != nil {
+		return nil, err
+	}
+	idx, found := db.idx.Search(key)
+	if !found {
+		return nil, ErrKeyNotFound
+	}
+	return db.get(idx)
+}
 
+// get gets the value of the index from the db
+func (db *DB) get(idx index) ([]byte, error) {
+	var segment *segment
+	for _, seg := range db.segments {
+		if seg.ID() == idx.segment() {
+			segment = seg
+			break
+		}
+	}
+	return segment.ReadAt(idx.offset())
+}
+
+func (db *DB) createSegment() (*segment, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	// Generate a new sequential segment identifier.
 	var id uint16
 	if len(db.segments) > 0 {
 		id = db.segments[len(db.segments)-1].ID() + 1
 	}
-	filename := fmt.Sprintf("%04x", id)
+	filename := fmt.Sprintf("%04x%s", id, dbFileSuffix)
 
 	// Generate new empty segment.
 	segment, err := createSegment(id, filepath.Join(db.path, filename), db.idx)
@@ -110,7 +141,7 @@ func (db *DB) Delete(key []byte) error {
 func (db *DB) set(key, value []byte) error {
 	var err error
 	segment := db.activeSegment()
-	if segment == nil || !segment.CanWrite(key, value) {
+	if segment == nil || !segment.CanWrite() {
 		if segment, err = db.createSegment(); err != nil {
 			return err
 		}

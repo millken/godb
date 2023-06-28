@@ -161,11 +161,9 @@ func (s *segment) loadIndexs() error {
 	return nil
 }
 
-func (s *segment) CanWrite(key, value []byte) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	return int(s.size+uint32(len(key)+len(value)+hdrSize)) <= maxSegmentSize
+func (s *segment) CanWrite() bool {
+	size := s.Size()
+	return size+segmentIncrementSize <= maxSegmentSize
 }
 
 func (s *segment) Write(key, value []byte) (err error) {
@@ -207,29 +205,22 @@ func (s *segment) Write(key, value []byte) (err error) {
 	return nil
 }
 
-func (s *segment) Read(key []byte) ([]byte, error) {
+func (s *segment) ReadAt(off uint32) ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	n, found := s.idx.Search(key)
-	if !found {
-		return nil, ErrKeyNotFound
-	}
 	var h hdr
-	_, err := s.mmap.ReadAt(h[:], int64(n))
+	_, err := s.mmap.ReadAt(h[:], int64(off))
 	if err != nil {
 		return nil, err
 	}
 	if !h.isValid() {
 		return nil, ErrInvalidSegment
 	}
-	if h.getKeySize() != uint8(len(key)) {
-		return nil, ErrInvalidSegment
-	}
 	if h.getFlag() == flagDelete {
 		return nil, ErrKeyNotFound
 	}
 	value := make([]byte, h.getValueSize())
-	_, err = s.mmap.ReadAt(value, int64(n.offset()+hdrSize+uint32(len(key))))
+	_, err = s.mmap.ReadAt(value, int64(off+hdrSize+uint32(h.getKeySize())))
 	if err != nil {
 		return nil, err
 	}
