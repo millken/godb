@@ -34,6 +34,9 @@ type DB struct {
 
 // Open opens a database at the given path.
 func Open(path string, options ...Option) (*DB, error) {
+	if err := os.MkdirAll(path, fileModePerm); err != nil {
+		return nil, err
+	}
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return nil, err
