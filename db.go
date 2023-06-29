@@ -160,7 +160,13 @@ func (db *DB) set(key, value []byte) error {
 
 // Close releases all db resources.
 func (db *DB) Close() error {
-	return nil
+	var err error
+	for _, s := range db.segments {
+		if e := s.Close(); e != nil && err == nil {
+			err = e
+		}
+	}
+	return err
 }
 
 func validateKey(key []byte) error {
