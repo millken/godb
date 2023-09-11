@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path"
 	"path/filepath"
+	"sort"
 	"sync"
 
 	art "github.com/WenyXu/sync-adaptive-radix-tree"
+	"github.com/millken/gobuffers"
 	"github.com/pkg/errors"
 )
 
@@ -22,37 +25,31 @@ var (
 	ErrEmptyKey      = errors.New("empty key")
 	ErrKeyTooLarge   = errors.New("key size is too large")
 	ErrValueTooLarge = errors.New("value size is too large")
+
+	ErrInvalidKey     = errors.New("invalid key")
+	ErrInvalidTTL     = errors.New("invalid ttl")
+	ErrExpiredKey     = errors.New("key has expired")
+	ErrTxClosed       = errors.New("tx closed")
+	ErrDatabaseClosed = errors.New("database closed")
+	ErrTxNotWritable  = errors.New("tx not writable")
 )
 
 type DB struct {
 	path     string
 	opts     *option
 	segments []*segment
+	current  *segment
 	idx      *art.Tree[index]
-	mu       sync.Mutex
+	mu       sync.RWMutex
+	closed   bool
 }
 
 // Open opens a database at the given path.
-func Open(path string, options ...Option) (*DB, error) {
-	if err := os.MkdirAll(path, fileModePerm); err != nil {
+func Open(dbpath string, options ...Option) (*DB, error) {
+	if err := os.MkdirAll(dbpath, 0777); err != nil {
 		return nil, err
 	}
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		return nil, err
-	}
-	var segments []string
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		var name string
-		_, err := fmt.Sscanf(entry.Name(), dbFileSuffix, &name)
-		if err != nil {
-			continue
-		}
-		segments = append(segments, name)
-	}
+
 	opts := defaultOption()
 	for _, opt := range options {
 		if err := opt(opts); err != nil {
@@ -60,10 +57,39 @@ func Open(path string, options ...Option) (*DB, error) {
 		}
 	}
 	db := &DB{
-		path: path,
+		path: dbpath,
 		opts: opts,
 		idx:  &art.Tree[index]{},
 	}
+	entries, err := os.ReadDir(dbpath)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if filepath.Ext(entry.Name()) == dbFileSuffix {
+			segment := newSegment(0, path.Join(dbpath, entry.Name()), db.idx)
+			if err := segment.Open(); err != nil {
+				return nil, err
+			}
+			db.segments = append(db.segments, segment)
+			sort.Slice(db.segments, func(i, j int) bool {
+				return db.segments[i].ID() < db.segments[j].ID()
+			})
+		}
+	}
+	if len(db.segments) == 0 {
+		filename := fmt.Sprintf("%04x%s", 0, dbFileSuffix)
+		// Generate new empty segment.
+		segment, err := createSegment(0, filepath.Join(db.path, filename), db.idx)
+		if err != nil {
+			return nil, err
+		}
+		db.segments = append(db.segments, segment)
+	}
+	db.current = db.segments[len(db.segments)-1]
 	return db, nil
 }
 
@@ -171,6 +197,24 @@ func (db *DB) Close() error {
 	}
 	return err
 }
+func (db *DB) writeBatch(recs records) error {
+	offset := db.current.size
+	buffer := gobuffers.Get()
+	defer buffer.Free()
+	for _, rec := range recs {
+		if err := rec.marshalToBuffer(buffer); err != nil {
+			return err
+		}
+		rec.offset = offset
+		rec.seg = db.current.ID()
+		offset += rec.size()
+	}
+	if err := db.current.write(buffer.Bytes()); err != nil {
+		return err
+	}
+
+	return nil
+}
 
 func validateKey(key []byte) error {
 	ks := len(key)
@@ -180,4 +224,78 @@ func validateKey(key []byte) error {
 		return ErrKeyTooLarge
 	}
 	return nil
+}
+
+func (db *DB) Begin(writable bool) (*Tx, error) {
+	tx := &Tx{
+		db:       db,
+		writable: writable,
+	}
+	tx.lock()
+	if db.closed {
+		tx.unlock()
+		return nil, ErrDatabaseClosed
+	}
+	if writable {
+		tx.committed = make([]*record, 0, 1)
+
+	}
+	return tx, nil
+}
+
+// View executes a function within a managed read-only transaction.
+// When a non-nil error is returned from the function that error will be return
+// to the caller of View().
+func (db *DB) View(fn func(tx *Tx) error) error {
+	return db.managed(false, fn)
+}
+
+// Update executes a function within a managed read/write transaction.
+// The transaction has been committed when no error is returned.
+// In the event that an error is returned, the transaction will be rolled back.
+// When a non-nil error is returned from the function, the transaction will be
+// rolled back and the that error will be return to the caller of Update().
+func (db *DB) Update(fn func(tx *Tx) error) error {
+	return db.managed(true, fn)
+}
+
+func (tx *Tx) Rollback() error {
+	if tx.db == nil {
+		return ErrTxClosed
+	}
+	// The rollback func does the heavy lifting.
+	if tx.writable {
+		tx.rollback()
+	}
+	// unlock the database for more transactions.
+	tx.unlock()
+	// Clear the db field to disable this transaction from future use.
+	tx.db = nil
+	return nil
+}
+
+// managed calls a block of code that is fully contained in a transaction.
+// This method is intended to be wrapped by Update and View
+func (db *DB) managed(writable bool, fn func(tx *Tx) error) (err error) {
+	var tx *Tx
+	tx, err = db.Begin(writable)
+	if err != nil {
+		return
+	}
+	defer func() {
+		if err != nil {
+			// The caller returned an error. We must rollback.
+			_ = tx.Rollback()
+			return
+		}
+		if writable {
+			// Everything went well. Lets Commit()
+			err = tx.Commit()
+		} else {
+			// read-only transaction can only roll back.
+			err = tx.Rollback()
+		}
+	}()
+	err = fn(tx)
+	return
 }

@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"math/rand"
 	"os"
+	"path"
 	"runtime"
 	"strconv"
 	"strings"
@@ -16,6 +17,32 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestDB(t *testing.T) {
+	require := require.New(t)
+	dbpath := path.Join(".", "_godb")
+	db, err := Open(dbpath)
+	require.NoError(err)
+	require.NotNil(db)
+	defer func() {
+		os.RemoveAll(dbpath)
+	}()
+	db.Update(func(tx *Tx) error {
+		for i := 0; i < 100; i++ {
+			key := []byte(fmt.Sprintf("%016d", i))
+			value := []byte(fmt.Sprintf("%d", i))
+			if err := tx.Put(key, value); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	require.NoError(db.Close())
+	// db, err = Open(dbpath)
+	// require.NoError(err)
+	// require.NotNil(db)
+
+}
 
 func TestDB_Concurrent(t *testing.T) {
 	require := require.New(t)
@@ -162,10 +189,10 @@ func BenchmarkDB_Put(b *testing.B) {
 
 	variants := map[string][]Option{
 		"NoSync": {
-			FsyncOption(false),
+			WithFsync(false),
 		},
 		"Sync": {
-			FsyncOption(true),
+			WithFsync(true),
 		},
 	}
 

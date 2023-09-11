@@ -12,6 +12,8 @@ type Option func(*option) error
 type option struct {
 	// fsync is used to sync the data to disk
 	fsync bool
+	// segmentSize is the size of each segment
+	segmentSize int64
 }
 
 func defaultOption() *option {
@@ -19,10 +21,15 @@ func defaultOption() *option {
 		fsync: false,
 	}
 }
-
-func FsyncOption(fsync bool) Option {
-	return func(db *option) error {
-		db.fsync = fsync
+func WithSegmentSize(s int64) Option {
+	return func(o *option) error {
+		o.segmentSize = s
+		return nil
+	}
+}
+func WithFsync(fsync bool) Option {
+	return func(o *option) error {
+		o.fsync = fsync
 		return nil
 	}
 }

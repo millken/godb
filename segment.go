@@ -77,7 +77,6 @@ func createSegment(id uint16, path string, idx *art.Tree[index]) (*segment, erro
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
 
 	var m segmentMeta
 	m.setID(id)
@@ -146,10 +145,10 @@ func (s *segment) loadIndexs() error {
 		if !h.isValid() {
 			break
 		}
-		if h.getFlag().isDeleted() {
-			s.size += h.entrySize()
-			continue
-		}
+		// if h.getFlag().isDeleted() {
+		// 	s.size += h.entrySize()
+		// 	continue
+		// }
 		key := make([]byte, h.getKeySize())
 		_, err = s.mmap.ReadAt(key, int64(s.size+hdrSize))
 		if err != nil {
@@ -166,6 +165,19 @@ func (s *segment) CanWrite() bool {
 	return size+segmentIncrementSize <= maxSegmentSize
 }
 
+func (s *segment) write(b []byte) error {
+	if s.size+uint32(len(b)) > uint32(s.mmap.Len()) {
+		if err := s.reSize(s.size + segmentIncrementSize); err != nil {
+			return err
+		}
+	}
+	if _, err := s.mmap.WriteAt(b, int64(s.size)); err != nil {
+		return err
+	}
+	s.size += uint32(len(b))
+	return nil
+}
+
 func (s *segment) Write(key, value []byte) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -175,15 +187,15 @@ func (s *segment) Write(key, value []byte) (err error) {
 			return err
 		}
 	}
-	flag := flagPut
+	flag := putted
 	if value == nil {
-		flag = flagDelete
+		flag = deleted
 	}
 	var (
 		h = hdr{}
 		n = 0
 	)
-	h.setFlag(flag).
+	h.setState(flag).
 		setKeySize(uint8(len(key))).
 		setValueSize(uint32(len(value))).
 		setChecksum(crc32.ChecksumIEEE(value))
@@ -216,7 +228,7 @@ func (s *segment) ReadAt(off uint32) ([]byte, error) {
 	if !h.isValid() {
 		return nil, ErrInvalidSegment
 	}
-	if h.getFlag() == flagDelete {
+	if h.getState() == deleted {
 		return nil, ErrKeyNotFound
 	}
 	value := make([]byte, h.getValueSize())
@@ -250,6 +262,9 @@ func (s *segment) Size() uint32 {
 
 // reSize resizes the segment to the given size.
 func (s *segment) reSize(size uint32) (err error) {
+	if err := s.mmap.Sync(); err != nil {
+		return err
+	}
 	if err = s.mmap.Close(); err != nil {
 		return err
 	}

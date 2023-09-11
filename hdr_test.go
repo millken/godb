@@ -23,13 +23,10 @@ func TestUnsafe(t *testing.T) {
 
 func TestHdr(t *testing.T) {
 	h := hdr{}
-	h.setFlag(flagPut)
 	h.setKeySize(100)
 	h.setValueSize(1000)
 	h.setChecksum(10000)
-	if !h.getFlag().isPut() {
-		t.Fatalf("expect flagEntryPut, got %v", h.getFlag())
-	}
+
 	if h.getKeySize() != 100 {
 		t.Fatalf("expect 100, got %v", h.getKeySize())
 	}
@@ -44,7 +41,6 @@ func TestHdr(t *testing.T) {
 func BenchmarkHdrSet(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		h := hdr{}
-		h.setFlag(flagPut)
 		h.setKeySize(100)
 		h.setValueSize(1000)
 		h.setChecksum(10000)
@@ -54,7 +50,6 @@ func BenchmarkHdrSet(b *testing.B) {
 func BenchmarkHdrGet(b *testing.B) {
 	h := hdr{}
 	for i := 0; i < b.N; i++ {
-		h.getFlag()
 		h.getKeySize()
 		h.getValueSize()
 		h.getChecksum()

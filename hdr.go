@@ -11,14 +11,24 @@ const (
 +----------+---------------+---------------+---------------+
 *
 */
+type state uint8
+
+const (
+	// putted means the entry is added
+	putted state = iota + 1
+	// deleted means the entry is deleted
+	deleted
+	// expried means the entry is expried
+	expried
+)
 
 type hdr [hdrSize]byte
 
-func (h *hdr) getFlag() flag {
-	return flag((*h)[0])
+func (h *hdr) getState() state {
+	return state((*h)[0])
 }
 
-func (h *hdr) setFlag(f flag) *hdr {
+func (h *hdr) setState(f state) *hdr {
 	(*h)[0] = byte(f)
 	return h
 }
@@ -57,7 +67,7 @@ func (h *hdr) setChecksum(checksum uint32) *hdr {
 }
 
 func (h *hdr) isValid() bool {
-	return h.getFlag().isValid() && h.getKeySize() > 0 && h.getValueSize() > 0
+	return h.getKeySize() > 0 && h.getValueSize() > 0
 }
 
 func (h *hdr) dataSize() uint32 {
@@ -80,27 +90,4 @@ func (i index) segment() uint16 {
 
 func (i index) offset() uint32 {
 	return uint32(i)
-}
-
-type flag uint8
-
-const (
-	// flagPut means the entry is added
-	flagPut flag = 1 << iota
-	// flagDelete means the entry is deleted
-	flagDelete
-)
-
-// isPut returns true if the flag is flagEntryPut
-func (f flag) isPut() bool {
-	return f&flagPut != 0
-}
-
-// IsDel returns true if the flag is flagEntryDel
-func (f flag) isDeleted() bool {
-	return f&flagDelete != 0
-}
-
-func (f flag) isValid() bool {
-	return f.isPut() || f.isDeleted()
 }
