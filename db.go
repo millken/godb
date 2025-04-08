@@ -237,7 +237,7 @@ func (db *DB) Begin(writable bool) (*Tx, error) {
 		return nil, ErrDatabaseClosed
 	}
 	if writable {
-		tx.committed = make([]*record, 0, 1)
+		tx.committed = make([]*record, 0, 3)
 
 	}
 	return tx, nil

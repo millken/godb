@@ -18,28 +18,37 @@ import (
 )
 
 func TestDB(t *testing.T) {
-	require := require.New(t)
+	r := require.New(t)
 	dbpath := path.Join(".", "_godb")
 	db, err := Open(dbpath)
-	require.NoError(err)
-	require.NotNil(db)
+	r.NoError(err)
+	r.NotNil(db)
 	defer func() {
 		os.RemoveAll(dbpath)
 	}()
 	db.Update(func(tx *Tx) error {
-		for i := 0; i < 100; i++ {
-			key := []byte(fmt.Sprintf("%016d", i))
-			value := []byte(fmt.Sprintf("%d", i))
-			if err := tx.Put(key, value); err != nil {
+		for i := range 100 {
+			key := fmt.Appendf(nil, "%016d", i)
+			value := fmt.Appendf(nil, "%d", i)
+			if err = tx.Put(key, value); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
-	require.NoError(db.Close())
-	// db, err = Open(dbpath)
-	// require.NoError(err)
-	// require.NotNil(db)
+	r.NoError(db.Close())
+	db, err = Open(dbpath)
+	r.NoError(err)
+	r.NotNil(db)
+	db.View(func(tx *Tx) error {
+		for i := range 100 {
+			key := fmt.Appendf(nil, "%016d", i)
+			value, err := tx.Get(key)
+			r.NoError(err)
+			r.Equal([]byte(fmt.Sprintf("%d", i)), value)
+		}
+		return nil
+	})
 
 }
 
@@ -65,7 +74,7 @@ func TestDB_Concurrent(t *testing.T) {
 		cnt     [n]uint32
 	)
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		closeWg.Add(1)
 		go func(i int) {
 			var put, get, found uint
@@ -284,7 +293,7 @@ func BenchmarkDB_Delete(b *testing.B) {
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	const keyCount = 10000
 	var keys [keyCount][]byte
-	for i := 0; i < keyCount; i++ {
+	for i := range keyCount {
 		keys[i] = []byte(strconv.Itoa(rng.Int()))
 	}
 	val := bytes.Repeat([]byte("x"), 10)
@@ -305,6 +314,109 @@ func BenchmarkDB_Delete(b *testing.B) {
 
 }
 
+func BenchmarkTxn_Put(b *testing.B) {
+
+	tests := []benchmarkTestCase{
+		{"128B", 128},
+		{"256B", 256},
+		{"1K", 1024},
+		{"2K", 2048},
+		{"4K", 4096},
+		{"8K", 8192},
+		{"16K", 16384},
+		{"32K", 32768},
+	}
+
+	variants := map[string][]Option{
+		"NoSync": {
+			WithFsync(false),
+		},
+		"Sync": {
+			WithFsync(true),
+		},
+	}
+
+	for name, options := range variants {
+		dir, cleanup := mustTempDir()
+		defer cleanup()
+
+		db, err := Open(dir, options...)
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer db.Close()
+
+		for _, tt := range tests {
+			b.Run(tt.name+name, func(b *testing.B) {
+				b.SetBytes(int64(tt.size))
+
+				key := []byte("foo")
+				value := []byte(strings.Repeat(" ", tt.size))
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					db.Update(func(tx *Tx) error {
+						if err := tx.Put(key, value); err != nil {
+							b.Fatal(err)
+						}
+						return nil
+					})
+				}
+			})
+		}
+	}
+}
+
+func BenchmarkTxn_BatchPut(b *testing.B) {
+
+	tests := []benchmarkTestCase{
+		{"128B", 128},
+		{"256B", 256},
+		{"1K", 1024},
+		{"2K", 2048},
+		{"4K", 4096},
+		{"8K", 8192},
+		{"16K", 16384},
+		{"32K", 32768},
+	}
+
+	variants := map[string][]Option{
+		"NoSync": {
+			WithFsync(false),
+		},
+		"Sync": {
+			WithFsync(true),
+		},
+	}
+
+	for name, options := range variants {
+		dir, cleanup := mustTempDir()
+		defer cleanup()
+
+		db, err := Open(dir, options...)
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer db.Close()
+
+		for _, tt := range tests {
+			b.Run(tt.name+name, func(b *testing.B) {
+				b.SetBytes(int64(tt.size))
+
+				key := []byte("foo")
+				value := []byte(strings.Repeat(" ", tt.size))
+				b.ResetTimer()
+				db.Update(func(tx *Tx) error {
+					for i := 0; i < b.N; i++ {
+						if err := tx.Put(key, value); err != nil {
+							b.Fatal(err)
+						}
+					}
+					return nil
+				})
+			})
+		}
+	}
+}
 func mustTempDir() (string, func()) {
 	dir, err := os.MkdirTemp("", "db-test")
 	if err != nil {

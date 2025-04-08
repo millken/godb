@@ -77,3 +77,19 @@ func (tx *Tx) Put(key, value []byte) error {
 	tx.addRecord(e)
 	return nil
 }
+
+// Get retrieves the value for a key.
+func (tx *Tx) Get(key []byte) ([]byte, error) {
+	if err := validateKey(key); err != nil {
+		return nil, err
+	}
+	if tx.db == nil {
+		return nil, ErrTxClosed
+	}
+	idx, found := tx.db.idx.Get(key)
+	if !found {
+		return nil, nil
+	}
+
+	return tx.db.get(idx)
+}
