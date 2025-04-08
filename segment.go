@@ -5,7 +5,7 @@ import (
 	"os"
 	"sync"
 
-	art "github.com/WenyXu/sync-adaptive-radix-tree"
+	art "github.com/millken/godb/internal/radixtree"
 	"github.com/pkg/errors"
 
 	"github.com/go-mmap/mmap"
@@ -154,7 +154,7 @@ func (s *segment) loadIndexs() error {
 		if err != nil {
 			return err
 		}
-		s.idx.Insert(key, newIndex(s.id, s.size))
+		s.idx.Put(key, newIndex(s.id, s.size))
 		s.size += h.entrySize()
 	}
 	return nil
@@ -193,7 +193,7 @@ func (s *segment) Write(key, value []byte) (err error) {
 	}
 	var (
 		h = hdr{}
-		n = 0
+		n int
 	)
 	h.setState(flag).
 		setKeySize(uint8(len(key))).
@@ -213,7 +213,7 @@ func (s *segment) Write(key, value []byte) (err error) {
 		}
 		s.size += uint32(len(value))
 	}
-	s.idx.Insert(key, newIndex(s.id, s.size-entrySize))
+	s.idx.Put(key, newIndex(s.id, s.size-entrySize))
 	return nil
 }
 
@@ -262,7 +262,7 @@ func (s *segment) Size() uint32 {
 
 // reSize resizes the segment to the given size.
 func (s *segment) reSize(size uint32) (err error) {
-	if err := s.mmap.Sync(); err != nil {
+	if err = s.mmap.Sync(); err != nil {
 		return err
 	}
 	if err = s.mmap.Close(); err != nil {

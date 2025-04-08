@@ -3,7 +3,6 @@ package godb
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
 	"math/rand"
 	"os"
 	"path"
@@ -307,7 +306,7 @@ func BenchmarkDB_Delete(b *testing.B) {
 }
 
 func mustTempDir() (string, func()) {
-	dir, err := ioutil.TempDir("", "db-test")
+	dir, err := os.MkdirTemp("", "db-test")
 	if err != nil {
 		panic(fmt.Sprintf("failed to create temp dir: %v", err))
 	}

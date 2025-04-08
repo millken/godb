@@ -62,7 +62,7 @@ func (tx *Tx) rollback() {
 
 func (tx *Tx) buildIndex(recs []*record) error {
 	for _, rec := range recs {
-		tx.db.idx.Insert(rec.key, newIndex(rec.seg, rec.offset))
+		tx.db.idx.Put(rec.key, newIndex(rec.seg, rec.offset))
 	}
 	return nil
 }

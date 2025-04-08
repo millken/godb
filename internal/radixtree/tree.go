@@ -2,6 +2,7 @@ package radixtree
 
 import (
 	"bytes"
+	"iter"
 )
 
 // Tree is a radix tree of bytes keys and any values.
@@ -20,16 +21,8 @@ type radixNode[T any] struct {
 	// segment used in the parent to index this child.
 	prefix []byte
 	edges  []edge[T]
-	leaf   *leaf[T]
+	leaf   *Item[T]
 }
-
-// WalkFunc is the type of the function called for each value visited by Walk
-// or WalkPath. The key argument contains the elements of the key at which the
-// value is stored.
-//
-// If the function returns true Walk stops immediately and returns. This
-// applies to WalkPath as well.
-type WalkFunc func(key []byte, value any) bool
 
 // InspectFunc is the type of the function called for each node visited by
 // Inspect. The key argument contains the key at which the node is located, the
@@ -39,10 +32,13 @@ type WalkFunc func(key []byte, value any) bool
 // If the function returns true Inspect stops immediately and returns.
 type InspectFunc[T any] func(link, prefix, key []byte, depth, children int, hasValue bool, value T) bool
 
-type leaf[T any] struct {
+type Item[T any] struct {
 	key   []byte
 	value T
 }
+
+func (kv *Item[T]) Key() []byte { return kv.key }
+func (kv *Item[T]) Value() T    { return kv.value }
 
 type edge[T any] struct {
 	radix byte
@@ -56,7 +52,8 @@ func (t *Tree[T]) Len() int {
 
 // Get returns the value stored at the given key. Returns false if there is no
 // value present for the key.
-func (t *Tree[T]) Get(key []byte) (value T, ok bool) {
+func (t *Tree[T]) Get(key []byte) (T, bool) {
+	var zero T
 	node := &t.root
 	// Consume key data while mathcing edge and prefix; return if remaining key
 	// data matches nothing.
@@ -64,20 +61,20 @@ func (t *Tree[T]) Get(key []byte) (value T, ok bool) {
 		// Find edge for radix.
 		node = node.getEdge(key[0])
 		if node == nil {
-			return value, false
+			return zero, false
 		}
 
 		// Consume key data.
 		key = key[1:]
 		if !bytes.HasPrefix(key, node.prefix) {
-			return value, false
+			return zero, false
 		}
 		key = key[len(node.prefix):]
 	}
 	if node.leaf != nil {
 		return node.leaf.value, true
 	}
-	return value, false
+	return zero, false
 }
 
 // Put inserts the value into the tree at the given key, replacing any existing
@@ -108,7 +105,7 @@ func (t *Tree[T]) Put(key []byte, value T) bool {
 		// data, so add child that has a prefix of the unmatched key data and
 		// set its value to the new value.
 		newChild := &radixNode[T]{
-			leaf: &leaf[T]{
+			leaf: &Item[T]{
 				key:   key,
 				value: value,
 			},
@@ -139,7 +136,7 @@ func (t *Tree[T]) Put(key []byte, value T) bool {
 			isNewValue = true
 			t.size++
 		}
-		node.leaf = &leaf[T]{
+		node.leaf = &Item[T]{
 			key:   key,
 			value: value,
 		}
@@ -228,10 +225,9 @@ func (t *Tree[T]) DeletePrefix(prefix []byte) bool {
 
 	if node.edges != nil {
 		var count int
-		node.walk(func(k []byte, _ any) bool {
+		for range node.iter() {
 			count++
-			return false
-		})
+		}
 		t.size -= count
 		node.edges = nil
 	} else {
@@ -250,58 +246,86 @@ func (t *Tree[T]) DeletePrefix(prefix []byte) bool {
 	return true
 }
 
-// Walk visits all nodes whose keys match or are prefixed by the specified key,
-// calling walkFn for each value found. If walkFn returns true, Walk returns.
-// Use empty key "" to visit all nodes starting from the root or the Tree.
+// Iter visits all nodes in the tree, yielding the key and value of each.
 //
 // The tree is traversed in lexical order, making the output deterministic.
-func (t *Tree[T]) Walk(key []byte, walkFn WalkFunc) {
-	node := &t.root
-	for len(key) != 0 {
-		if node = node.getEdge(key[0]); node == nil {
-			return
-		}
-
-		// Consume key data
-		key = key[1:]
-		if !bytes.HasPrefix(key, node.prefix) {
-			if bytes.HasPrefix(node.prefix, key) {
-				break
-			}
-			return
-		}
-		key = key[len(node.prefix):]
-	}
-
-	// Walk down tree starting at node located at key.
-	node.walk(walkFn)
+func (t *Tree[T]) Iter() iter.Seq2[[]byte, T] {
+	return t.root.iter()
 }
 
-// WalkPath walks each node along the path from the root to the node at the
-// given key, calling walkFn for each node that has a value. If walkFn returns
-// true, WalkPath returns.
+// IterAt visits all nodes whose keys match or are prefixed by the specified
+// key, yielding the key and value of each. An empty key "" to visits all
+// nodes, and is the same as calling Iter.
 //
 // The tree is traversed in lexical order, making the output deterministic.
-func (t *Tree[T]) WalkPath(key []byte, walkFn WalkFunc) {
-	node := &t.root
-	for {
-		if node.leaf != nil && walkFn(node.leaf.key, node.leaf.value) {
-			return
-		}
+func (t *Tree[T]) IterAt(key []byte) iter.Seq2[[]byte, T] {
+	return func(yield func([]byte, T) bool) {
+		// Find the subtree with a matching prefix.
+		node := &t.root
+		for len(key) != 0 {
+			if node = node.getEdge(key[0]); node == nil {
+				return
+			}
 
-		if len(key) == 0 {
-			return
+			// Consume key data
+			key = key[1:]
+			if !bytes.HasPrefix(key, node.prefix) {
+				if bytes.HasPrefix(node.prefix, key) {
+					break
+				}
+				return
+			}
+			key = key[len(node.prefix):]
 		}
+		// Iterate the subtree.
+		node.walk(yield)
+	}
+}
 
-		if node = node.getEdge(key[0]); node == nil {
-			return
-		}
+func (node *radixNode[T]) iter() iter.Seq2[[]byte, T] {
+	return func(yield func([]byte, T) bool) {
+		node.walk(yield)
+	}
+}
 
-		key = key[1:]
-		if !bytes.HasPrefix(key, node.prefix) {
-			return
+func (node *radixNode[T]) walk(yield func([]byte, T) bool) bool {
+	if node.leaf != nil && !yield(node.leaf.key, node.leaf.value) {
+		return false
+	}
+	for _, edge := range node.edges {
+		if !edge.node.walk(yield) {
+			return false
 		}
-		key = key[len(node.prefix):]
+	}
+	return true
+}
+
+// IterPath returns an iterator that visits each node along the path from the
+// root to the node at the given key. yielding the key and value of each.
+//
+// The tree is traversed in lexical order, making the output deterministic.
+func (t *Tree[T]) IterPath(key []byte) iter.Seq2[[]byte, T] {
+	return func(yield func([]byte, T) bool) {
+		node := &t.root
+		for {
+			if node.leaf != nil && !yield(node.leaf.key, node.leaf.value) {
+				return
+			}
+
+			if len(key) == 0 {
+				return
+			}
+
+			if node = node.getEdge(key[0]); node == nil {
+				return
+			}
+
+			key = key[1:]
+			if !bytes.HasPrefix(key, node.prefix) {
+				return
+			}
+			key = key[len(node.prefix):]
+		}
 	}
 }
 
@@ -335,7 +359,7 @@ func (node *radixNode[T]) split(p int) {
 	node.edges = nil
 	node.addEdge(edge[T]{node.prefix[p], split})
 	if p == 0 {
-		node.prefix = []byte{}
+		node.prefix = nil
 	} else {
 		node.prefix = node.prefix[:p]
 	}
@@ -376,18 +400,6 @@ func (node *radixNode[T]) compress() {
 	node.prefix = b.Bytes()
 	node.leaf = edge.node.leaf
 	node.edges = edge.node.edges
-}
-
-func (node *radixNode[T]) walk(walkFn WalkFunc) bool {
-	if node.leaf != nil && walkFn(node.leaf.key, node.leaf.value) {
-		return true
-	}
-	for _, edge := range node.edges {
-		if edge.node.walk(walkFn) {
-			return true
-		}
-	}
-	return false
 }
 
 func (node *radixNode[T]) inspect(link, key []byte, depth int, inspectFn InspectFunc[T]) bool {

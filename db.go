@@ -9,9 +9,9 @@ import (
 	"sort"
 	"sync"
 
-	art "github.com/WenyXu/sync-adaptive-radix-tree"
-	"github.com/millken/gobuffers"
+	art "github.com/millken/godb/internal/radixtree"
 	"github.com/pkg/errors"
+	"github.com/valyala/bytebufferpool"
 )
 
 const (
@@ -59,7 +59,7 @@ func Open(dbpath string, options ...Option) (*DB, error) {
 	db := &DB{
 		path: dbpath,
 		opts: opts,
-		idx:  &art.Tree[index]{},
+		idx:  art.New[index](),
 	}
 	entries, err := os.ReadDir(dbpath)
 	if err != nil {
@@ -117,7 +117,7 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	if err := validateKey(key); err != nil {
 		return nil, err
 	}
-	idx, found := db.idx.Search(key)
+	idx, found := db.idx.Get(key)
 	if !found {
 		return nil, ErrKeyNotFound
 	}
@@ -160,7 +160,7 @@ func (db *DB) Delete(key []byte) error {
 	if err := validateKey(key); err != nil {
 		return err
 	}
-	_, ok := db.idx.Search(key)
+	_, ok := db.idx.Get(key)
 	if !ok {
 		return nil
 	}
@@ -199,8 +199,8 @@ func (db *DB) Close() error {
 }
 func (db *DB) writeBatch(recs records) error {
 	offset := db.current.size
-	buffer := gobuffers.Get()
-	defer buffer.Free()
+	buffer := bytebufferpool.Get()
+	defer bytebufferpool.Put(buffer)
 	for _, rec := range recs {
 		if err := rec.marshalToBuffer(buffer); err != nil {
 			return err

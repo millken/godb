@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	art "github.com/WenyXu/sync-adaptive-radix-tree"
+	art "github.com/millken/godb/internal/radixtree"
 	"github.com/stretchr/testify/require"
 )
 

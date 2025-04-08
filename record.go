@@ -3,8 +3,8 @@ package godb
 import (
 	"hash/crc32"
 
-	"github.com/millken/gobuffers"
 	"github.com/pkg/errors"
+	"github.com/valyala/bytebufferpool"
 )
 
 var (
@@ -31,7 +31,7 @@ func newRecord(key, value []byte, st state) *record {
 	return r
 }
 
-func (e *record) marshalToBuffer(buff *gobuffers.Buffer) error {
+func (e *record) marshalToBuffer(buff *bytebufferpool.ByteBuffer) error {
 	wh, err := buff.Write(e.hdr[:])
 	if err != nil {
 		return err
