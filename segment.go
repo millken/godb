@@ -178,7 +178,7 @@ func (s *segment) write(b []byte) error {
 	return nil
 }
 
-func (s *segment) Write(key, value []byte) (err error) {
+func (s *segment) Write(key, value []byte, state state) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entrySize := uint32(len(key) + len(value) + hdrSize)
@@ -187,15 +187,11 @@ func (s *segment) Write(key, value []byte) (err error) {
 			return err
 		}
 	}
-	flag := putted
-	if value == nil {
-		flag = deleted
-	}
 	var (
 		h = hdr{}
 		n int
 	)
-	h.setState(flag).
+	h.setState(state).
 		setKeySize(uint8(len(key))).
 		setValueSize(uint32(len(value))).
 		setChecksum(crc32.ChecksumIEEE(value))
@@ -230,6 +226,9 @@ func (s *segment) ReadAt(off uint32) ([]byte, error) {
 	}
 	if h.getState() == deleted {
 		return nil, ErrKeyNotFound
+	}
+	if h.getValueSize() == 0 {
+		return nil, nil
 	}
 	value := make([]byte, h.getValueSize())
 	_, err = s.mmap.ReadAt(value, int64(off+hdrSize+uint32(h.getKeySize())))
@@ -278,4 +277,76 @@ func (s *segment) reSize(size uint32) (err error) {
 		return err
 	}
 	return nil
+}
+
+func (s *segment) updateRecordState(off uint32, st state) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var h hdr
+	_, err := s.mmap.ReadAt(h[:], int64(off))
+	if err != nil {
+		return err
+	}
+	if !h.isValid() {
+		return ErrInvalidSegment
+	}
+	h.setState(st)
+	_, err = s.mmap.WriteAt(h[:], int64(off))
+	return err
+}
+
+func (s *segment) ScanHdr(fn func(h hdr) error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for off := uint32(segmentMetaSize); off < s.size; {
+		var h hdr
+		_, err := s.mmap.ReadAt(h[:], int64(off))
+		if err != nil {
+			break
+		}
+		if !h.isValid() {
+			break
+		}
+		if err = fn(h); err != nil {
+			break
+		}
+		off += h.entrySize()
+	}
+	return
+}
+
+func (s *segment) Scan(fn func(r *record) error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for off := uint32(segmentMetaSize); off < s.size; {
+		var h hdr
+		_, err := s.mmap.ReadAt(h[:], int64(off))
+		if err != nil {
+			break
+		}
+		if !h.isValid() {
+			break
+		}
+		key := make([]byte, h.getKeySize())
+		_, err = s.mmap.ReadAt(key, int64(off+hdrSize))
+		if err != nil {
+			break
+		}
+		value := make([]byte, h.getValueSize())
+		if _, err = s.mmap.ReadAt(value, int64(off+hdrSize+uint32(h.getKeySize()))); err != nil {
+			break
+		}
+		rec := &record{
+			hdr:    h,
+			offset: off,
+			key:    key,
+			value:  value,
+			seg:    s.id,
+		}
+		if err = fn(rec); err != nil {
+			break
+		}
+		off += h.entrySize()
+	}
+	return
 }

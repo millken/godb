@@ -15,14 +15,14 @@ type benchmarkTestCase struct {
 }
 
 func TestSegmentMeta(t *testing.T) {
-	require := require.New(t)
+	r := require.New(t)
 	var meta segmentMeta
 	meta.setID(2)
 	buf := meta.encode()
-	require.Equal(int(segmentMetaSize), len(buf))
-	require.True(meta.isValid())
-	require.Equal(segmentVersion, meta.Version())
-	require.Equal(uint16(2), meta.ID())
+	r.Equal(int(segmentMetaSize), len(buf))
+	r.True(meta.isValid())
+	r.Equal(segmentVersion, meta.Version())
+	r.Equal(uint16(2), meta.ID())
 
 }
 
@@ -45,7 +45,7 @@ func TestSegment(t *testing.T) {
 		{[]byte("foo2"), bytes.Repeat([]byte("m"), 3*(1<<20))},
 	}
 	for _, tt := range tests {
-		err = segment.Write(tt.key, tt.value)
+		err = segment.Write(tt.key, tt.value, putted)
 		require.NoError(err)
 
 	}

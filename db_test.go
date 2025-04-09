@@ -17,6 +17,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestAA(t *testing.T) {
+	var a []byte
+	t.Log(len(a))
+}
+
 func TestDB(t *testing.T) {
 	r := require.New(t)
 	dbpath := path.Join(".", "_godb")
@@ -26,6 +31,17 @@ func TestDB(t *testing.T) {
 	defer func() {
 		os.RemoveAll(dbpath)
 	}()
+	err = db.Put([]byte("foo"), []byte("bar"))
+	r.NoError(err)
+	v, err := db.Get([]byte("foo"))
+	r.NoError(err)
+	r.Equal([]byte("bar"), v)
+	r.NoError(db.Delete([]byte("foo")))
+	v, err = db.Get([]byte("foo"))
+	r.Error(err)
+	r.Equal(ErrKeyNotFound, err)
+	r.Nil(v)
+
 	db.Update(func(tx *Tx) error {
 		for i := range 100 {
 			key := fmt.Appendf(nil, "%016d", i)

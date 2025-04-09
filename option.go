@@ -1,5 +1,7 @@
 package godb
 
+import "time"
+
 const (
 	B  = 1
 	KB = 1024 * B
@@ -7,13 +9,15 @@ const (
 	GB = 1024 * MB
 )
 
-type Option func(*option) error
+type Option func(*option)
 
 type option struct {
 	// fsync is used to sync the data to disk
 	fsync bool
 	// segmentSize is the size of each segment
 	segmentSize int64
+	// compactionInterval is the interval for automatic compaction
+	compactionInterval time.Duration
 }
 
 func defaultOption() *option {
@@ -22,14 +26,26 @@ func defaultOption() *option {
 	}
 }
 func WithSegmentSize(s int64) Option {
-	return func(o *option) error {
+	return func(o *option) {
 		o.segmentSize = s
-		return nil
 	}
 }
 func WithFsync(fsync bool) Option {
-	return func(o *option) error {
+	return func(o *option) {
 		o.fsync = fsync
-		return nil
+	}
+}
+
+// WithCompactionInterval 设置自动压缩间隔
+func WithCompactionInterval(interval time.Duration) Option {
+	return func(o *option) {
+		o.compactionInterval = interval
+	}
+}
+
+// WithCompactionDisabled 禁用自动压缩
+func WithCompactionDisabled() Option {
+	return func(o *option) {
+		o.compactionInterval = 0 // 设为0禁用定时压缩
 	}
 }
