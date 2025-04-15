@@ -25,16 +25,12 @@ const (
 )
 
 var (
-	ErrEmptyKey      = errors.New("empty key")
-	ErrKeyTooLarge   = errors.New("key size is too large")
-	ErrValueTooLarge = errors.New("value size is too large")
+	ErrEmptyKey = errors.New("empty key")
 
 	ErrInvalidKey     = errors.New("invalid key")
 	ErrInvalidTTL     = errors.New("invalid ttl")
 	ErrExpiredKey     = errors.New("key has expired")
-	ErrTxClosed       = errors.New("tx closed")
 	ErrDatabaseClosed = errors.New("database closed")
-	ErrTxNotWritable  = errors.New("tx not writable")
 )
 
 type DB struct {
@@ -255,80 +251,6 @@ func validateKey(key []byte) error {
 		return ErrKeyTooLarge
 	}
 	return nil
-}
-
-func (db *DB) Begin(writable bool) (*Tx, error) {
-	tx := &Tx{
-		db:       db,
-		writable: writable,
-	}
-	tx.lock()
-	if db.closed {
-		tx.unlock()
-		return nil, ErrDatabaseClosed
-	}
-	if writable {
-		tx.committed = make([]*record, 0, 3)
-
-	}
-	return tx, nil
-}
-
-// View executes a function within a managed read-only transaction.
-// When a non-nil error is returned from the function that error will be return
-// to the caller of View().
-func (db *DB) View(fn func(tx *Tx) error) error {
-	return db.managed(false, fn)
-}
-
-// Update executes a function within a managed read/write transaction.
-// The transaction has been committed when no error is returned.
-// In the event that an error is returned, the transaction will be rolled back.
-// When a non-nil error is returned from the function, the transaction will be
-// rolled back and the that error will be return to the caller of Update().
-func (db *DB) Update(fn func(tx *Tx) error) error {
-	return db.managed(true, fn)
-}
-
-func (tx *Tx) Rollback() error {
-	if tx.db == nil {
-		return ErrTxClosed
-	}
-	// The rollback func does the heavy lifting.
-	if tx.writable {
-		tx.rollback()
-	}
-	// unlock the database for more transactions.
-	tx.unlock()
-	// Clear the db field to disable this transaction from future use.
-	tx.db = nil
-	return nil
-}
-
-// managed calls a block of code that is fully contained in a transaction.
-// This method is intended to be wrapped by Update and View
-func (db *DB) managed(writable bool, fn func(tx *Tx) error) (err error) {
-	var tx *Tx
-	tx, err = db.Begin(writable)
-	if err != nil {
-		return
-	}
-	defer func() {
-		if err != nil {
-			// The caller returned an error. We must rollback.
-			_ = tx.Rollback()
-			return
-		}
-		if writable {
-			// Everything went well. Lets Commit()
-			err = tx.Commit()
-		} else {
-			// read-only transaction can only roll back.
-			err = tx.Rollback()
-		}
-	}()
-	err = fn(tx)
-	return
 }
 
 func (db *DB) compactionLoop() {

@@ -1,6 +1,9 @@
 package godb
 
-import "time"
+import (
+	"hash/crc32"
+	"time"
+)
 
 const (
 	B  = 1
@@ -48,4 +51,8 @@ func WithCompactionDisabled() Option {
 	return func(o *option) {
 		o.compactionInterval = 0 // 设为0禁用定时压缩
 	}
+}
+
+func bucketID(name []byte) uint32 {
+	return crc32.ChecksumIEEE(name)
 }
