@@ -10,11 +10,3 @@ type compactionStats struct {
 	RecordsRemoved    int   // 被删除的记录数
 	BytesReclaimed    int64 // 释放的字节数
 }
-
-type segmentStat struct {
-	segment      *segment
-	totalRecords int
-	liveRecords  int
-	liveBytes    int64
-	totalBytes   int64
-}

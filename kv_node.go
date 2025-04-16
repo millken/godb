@@ -48,6 +48,14 @@ var kvPool = &sync.Pool{
 	},
 }
 
+func newKVNode() *kvNode {
+	r := &kvNode{
+		node: node{
+			Hdr: Header{},
+		},
+	}
+	return r
+}
 func acquireKVNode() *kvNode {
 	return kvPool.Get().(*kvNode)
 }
@@ -71,7 +79,7 @@ func (r *kvNode) Reset() {
 	r.key = r.key[:0]
 	r.value = r.value[:0]
 	r.checkSum = 0
-	// r.Hdr = Header{}
+	r.Hdr = Header{}
 }
 
 type kvNode struct {
@@ -80,38 +88,6 @@ type kvNode struct {
 	key      []byte
 	value    []byte
 	checkSum uint32
-}
-
-// func NewRecord(bucketID uint32, key, value []byte) *Record {
-// 	r := &Record{
-// 		bucketID: bucketID,
-// 		key:      key,
-// 		value:    value,
-// 		checkSum: crc32.ChecksumIEEE(value),
-// 	}
-// 	r.Hdr.EncodeState(StateTypeRecord, StateRecordPutted)
-// 	r.Hdr.SetEntrySize(uint32(len(key)+len(value)) + 8)
-// 	return r
-// }
-
-type record struct {
-	hdr    hdr
-	offset uint32
-	seg    uint16
-	key    []byte
-	value  []byte
-}
-
-func newRecord(key, value []byte, st state) *record {
-	r := &record{
-		key:   key,
-		value: value,
-	}
-	r.hdr.setState(st).
-		setKeySize(uint8(len(key))).
-		setValueSize(uint32(len(value))).
-		setChecksum(crc32.ChecksumIEEE(value))
-	return r
 }
 
 func (r *kvNode) Set(bucketID uint32, key, value []byte) {
@@ -183,36 +159,4 @@ func (r *kvNode) MarshalToBuffer(buff *bytebufferpool.ByteBuffer) error {
 		return ErrInvalidRecord
 	}
 	return nil
-}
-func (e *record) marshalToBuffer(buff *bytebufferpool.ByteBuffer) error {
-	wh, err := buff.Write(e.hdr[:])
-	if err != nil {
-		return err
-	}
-	wk, err := buff.Write(e.key)
-	if err != nil {
-		return err
-	}
-	wv, err := buff.Write(e.value)
-	if err != nil {
-		return err
-	}
-	if wh+wk+wv != int(e.size()) {
-		return ErrInvalidRecord
-	}
-	return nil
-}
-
-func (e *record) size() uint32 {
-	return e.hdr.entrySize()
-}
-
-type records []*record
-
-func (r records) size() uint32 {
-	var size uint32
-	for _, e := range r {
-		size += e.size()
-	}
-	return size
 }

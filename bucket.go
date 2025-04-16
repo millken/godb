@@ -3,7 +3,7 @@ package godb
 import art "github.com/millken/godb/internal/radixtree"
 
 type Bucket struct {
-	tx     *Transaction
+	tx     *Tx
 	bucket uint32
 	idx    *art.Tree[int64]
 }

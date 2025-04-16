@@ -4,8 +4,8 @@ import (
 	art "github.com/millken/godb/internal/radixtree"
 )
 
-type Transaction struct {
-	db        *dB // the underlying database.
+type Tx struct {
+	db        *DB // the underlying database.
 	bucket    uint32
 	size      int64
 	writable  bool // when false mutable operations fail.
@@ -14,7 +14,7 @@ type Transaction struct {
 }
 
 // lock locks the database based on the transaction type.
-func (tx *Transaction) lock() {
+func (tx *Tx) lock() {
 	if tx.writable {
 		tx.db.mu.Lock()
 	} else {
@@ -23,14 +23,14 @@ func (tx *Transaction) lock() {
 }
 
 // unlock unlocks the database based on the transaction type.
-func (tx *Transaction) unlock() {
+func (tx *Tx) unlock() {
 	if tx.writable {
 		tx.db.mu.Unlock()
 	} else {
 		tx.db.mu.RUnlock()
 	}
 }
-func (tx *Transaction) CreateBucket(name []byte) (*Bucket, error) {
+func (tx *Tx) CreateBucket(name []byte) (*Bucket, error) {
 	_, found := tx.db.buckets.Load(bucketID(name))
 	if found {
 		return nil, ErrBucketExists
@@ -46,7 +46,7 @@ func (tx *Transaction) CreateBucket(name []byte) (*Bucket, error) {
 
 // Bucket returns a bucket by name. if the bucket does not exist it will be
 // created and returned. The bucket is not persisted until the transaction
-func (tx *Transaction) Bucket(name []byte) *Bucket {
+func (tx *Tx) Bucket(name []byte) *Bucket {
 	b, found := tx.db.buckets.Load(bucketID(name))
 	if found {
 		return b
@@ -60,7 +60,7 @@ func (tx *Transaction) Bucket(name []byte) *Bucket {
 	}
 }
 
-func (tx *Transaction) OpenBucket(name []byte) (*Bucket, error) {
+func (tx *Tx) OpenBucket(name []byte) (*Bucket, error) {
 	b, found := tx.db.buckets.Load(bucketID(name))
 	if !found {
 		return nil, ErrBucketNotFound
@@ -69,7 +69,7 @@ func (tx *Transaction) OpenBucket(name []byte) (*Bucket, error) {
 	return b, nil
 }
 
-func (tx *Transaction) Commit() error {
+func (tx *Tx) Commit() error {
 	if tx.db == nil {
 		return ErrTxClosed
 	} else if !tx.writable {
@@ -107,7 +107,7 @@ func (tx *Transaction) Commit() error {
 	// Update the size of the database.
 	return err
 }
-func (tx *Transaction) Rollback() error {
+func (tx *Tx) Rollback() error {
 	if tx.db == nil {
 		return ErrTxClosed
 	}
@@ -124,20 +124,20 @@ func (tx *Transaction) Rollback() error {
 
 // rollback handles the underlying rollback logic.
 // Intended to be called from Commit() and Rollback().
-func (tx *Transaction) rollback() {
+func (tx *Tx) rollback() {
 	tx.buckets = art.New[*bucketNode]()
 	tx.committed = art.New[*kvNode]()
 	tx.db.size.Swap(tx.size)
 }
 
-func (tx *Transaction) put(bucketID uint32, key, value []byte) error {
-	rr := acquireKVNode()
+func (tx *Tx) put(bucketID uint32, key, value []byte) error {
+	rr := newKVNode()
 	rr.Set(bucketID, key, value)
 	tx.committed.Put(key, rr)
 	return nil
 }
 
-func (tx *Transaction) get(idx *art.Tree[int64], key []byte) ([]byte, error) {
+func (tx *Tx) get(idx *art.Tree[int64], key []byte) ([]byte, error) {
 	if err := validateKey(key); err != nil {
 		return nil, err
 	}

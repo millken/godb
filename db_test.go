@@ -17,22 +17,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAA(t *testing.T) {
-	var a []byte
-	t.Log(len(a))
+type benchmarkTestCase struct {
+	name string
+	size int
 }
 
 func TestDB(t *testing.T) {
 	r := require.New(t)
 	dbpath := path.Join(".", "_godb")
-	db, err := OpendB(dbpath)
+	db, err := Open(dbpath)
 	r.NoError(err)
 	r.NotNil(db)
 	defer func() {
 		os.Remove(dbpath)
 	}()
 
-	err = db.Update(func(tx *Transaction) error {
+	err = db.Update(func(tx *Tx) error {
 		b, err := tx.CreateBucket([]byte("test"))
 		if err != nil {
 			return err
@@ -48,10 +48,10 @@ func TestDB(t *testing.T) {
 	})
 	r.NoError(err)
 	r.NoError(db.Close())
-	db, err = OpendB(dbpath)
+	db, err = Open(dbpath)
 	r.NoError(err)
 	r.NotNil(db)
-	db.View(func(tx *Transaction) error {
+	db.View(func(tx *Tx) error {
 		for i := range 100 {
 			b, err := tx.OpenBucket([]byte("test"))
 			if err != nil {
@@ -71,7 +71,7 @@ func TestDB_Concurrent(t *testing.T) {
 	require := require.New(t)
 	f, cleanup := mustTempFile()
 
-	db, err := OpendB(f)
+	db, err := Open(f)
 	require.NoError(err)
 	require.NotNil(db)
 	defer func() {
@@ -150,7 +150,7 @@ func TestRandomWrites(t *testing.T) {
 	require := require.New(t)
 	f, cleanup := mustTempFile()
 	defer cleanup()
-	db, err := OpendB(f)
+	db, err := Open(f)
 	require.NoError(err)
 
 	keys := [64][]byte{}
@@ -220,10 +220,10 @@ func BenchmarkDB_Put(b *testing.B) {
 	}
 
 	for name, options := range variants {
-		dir, cleanup := mustTempDir()
+		f, cleanup := mustTempFile()
 		defer cleanup()
 
-		db, err := Open(dir, options...)
+		db, err := Open(f, options...)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -265,7 +265,7 @@ func BenchmarkDB_Get(b *testing.B) {
 			f, cleanup := mustTempFile()
 			defer cleanup()
 
-			db, err := OpendB(f)
+			db, err := Open(f)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -300,7 +300,7 @@ func BenchmarkDB_Delete(b *testing.B) {
 	f, cleanup := mustTempFile()
 	defer cleanup()
 
-	db, err := OpendB(f)
+	db, err := Open(f)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -355,7 +355,7 @@ func BenchmarkTxn_Put(b *testing.B) {
 		f, cleanup := mustTempFile()
 		defer cleanup()
 
-		db, err := OpendB(f, options...)
+		db, err := Open(f, options...)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -369,7 +369,7 @@ func BenchmarkTxn_Put(b *testing.B) {
 				value := []byte(strings.Repeat(" ", tt.size))
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
-					db.Update(func(tx *Transaction) error {
+					db.Update(func(tx *Tx) error {
 						bc := tx.Bucket([]byte("test"))
 						if err := bc.Put(key, value); err != nil {
 							b.Fatal(err)
@@ -408,7 +408,7 @@ func BenchmarkTxn_BatchPut(b *testing.B) {
 		f, cleanup := mustTempFile()
 		defer cleanup()
 
-		db, err := OpendB(f, options...)
+		db, err := Open(f, options...)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -421,7 +421,7 @@ func BenchmarkTxn_BatchPut(b *testing.B) {
 				key := []byte("foo")
 				value := []byte(strings.Repeat(" ", tt.size))
 				b.ResetTimer()
-				db.Update(func(tx *Transaction) error {
+				db.Update(func(tx *Tx) error {
 					for i := 0; i < b.N; i++ {
 						bc := tx.Bucket([]byte("test"))
 						if err := bc.Put(key, value); err != nil {

@@ -56,3 +56,7 @@ func WithCompactionDisabled() Option {
 func bucketID(name []byte) uint32 {
 	return crc32.ChecksumIEEE(name)
 }
+
+func validateKey(key []byte) error {
+	return nil
+}
