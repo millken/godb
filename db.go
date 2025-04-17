@@ -4,13 +4,11 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/go-mmap/mmap"
+	"github.com/millken/godb/internal/bio"
 	art "github.com/millken/godb/internal/radixtree"
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/valyala/bytebufferpool"
@@ -19,7 +17,7 @@ import (
 type DB struct {
 	path               string
 	opts               *option
-	mmap               *mmap.File
+	io                 bio.Bio
 	buckets            *xsync.Map[uint32, *Bucket]
 	def                *Bucket
 	size               atomic.Int64
@@ -34,36 +32,18 @@ type DB struct {
 
 // Open opens a database at the given path.
 func Open(dbpath string, options ...Option) (*DB, error) {
-	fi, err := os.OpenFile(dbpath, os.O_RDWR|os.O_CREATE, 0666)
-	if err != nil {
-		return nil, err
-	}
-	ret, err := fi.Seek(0, io.SeekEnd)
-	if err != nil {
-		return nil, err
-	}
-	if ret == 0 {
-		// 如果文件为空，写入文件头
-		if err = fi.Truncate(32 * MB); err != nil {
-			return nil, err
-		}
-	}
-	if err = fi.Close(); err != nil {
-		return nil, err
-	}
-	// 重新打开文件
-	mmapFile, err := mmap.OpenFile(dbpath, mmap.Read|mmap.Write)
-	if err != nil {
-		return nil, err
-	}
 	opts := defaultOption()
 	for _, opt := range options {
 		opt(opts)
 	}
+	io, err := bio.NewBio(bio.BioEngine(opts.io), dbpath, opts.segmentSize)
+	if err != nil {
+		return nil, err
+	}
 	db := &DB{
 		path:    dbpath,
 		opts:    opts,
-		mmap:    mmapFile,
+		io:      io,
 		buckets: xsync.NewMap[uint32, *Bucket](),
 		def: &Bucket{
 			bucket: 0,
@@ -82,9 +62,9 @@ func Open(dbpath string, options ...Option) (*DB, error) {
 func (db *DB) loadBuckets() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	for db.size.Load() < int64(db.mmap.Len()) {
+	for db.size.Load() < db.io.Size() {
 		var h Header
-		_, err := db.mmap.ReadAt(h[:], db.size.Load())
+		_, err := db.io.ReadAt(h[:], db.size.Load())
 		if err != nil {
 			return err
 		}
@@ -97,7 +77,7 @@ func (db *DB) loadBuckets() error {
 				continue
 			}
 			name := make([]byte, h.EntrySize())
-			_, err = db.mmap.ReadAt(name, n)
+			_, err = db.io.ReadAt(name, n)
 			if err != nil {
 				return err
 			}
@@ -110,14 +90,14 @@ func (db *DB) loadBuckets() error {
 		} else if h.IsKV() {
 			//bucketID + keyLen
 			name := make([]byte, 6)
-			_, err = db.mmap.ReadAt(name, n)
+			_, err = db.io.ReadAt(name, n)
 			if err != nil {
 				return err
 			}
 			bucketID := binary.LittleEndian.Uint32(name[:4])
 			keyLen := binary.LittleEndian.Uint16(name[4:6])
 			key := make([]byte, keyLen)
-			_, err = db.mmap.ReadAt(key, n+6)
+			_, err = db.io.ReadAt(key, n+6)
 			if err != nil {
 				return err
 			}
@@ -201,7 +181,7 @@ func (db *DB) Delete(key []byte) error {
 
 func (db *DB) sync() error {
 	if db.opts.fsync {
-		if err := db.mmap.Sync(); err != nil {
+		if err := db.io.Sync(); err != nil {
 			return err
 		}
 	}
@@ -223,23 +203,13 @@ func (db *DB) updateStateWithPosition(pos int64, state State) error {
 }
 
 func (db *DB) writeAt(p []byte, off int64) (int, error) {
-	if (int(off) + len(p)) > db.mmap.Len() {
-		size := db.mmap.Len() + 32*MB
-		var err error
-		if err = db.mmap.Sync(); err != nil {
-			return 0, err
-		}
-		if err = db.mmap.Close(); err != nil {
-			return 0, err
-		}
-		if err = os.Truncate(db.path, int64(size)); err != nil {
-			return 0, err
-		}
-		if db.mmap, err = mmap.OpenFile(db.path, mmap.Read|mmap.Write); err != nil {
+	if (off + int64(len(p))) > db.io.Size() {
+		size := db.io.Size() + db.opts.segmentSize
+		if err := db.io.Truncate(size); err != nil {
 			return 0, err
 		}
 	}
-	return db.mmap.WriteAt(p, off)
+	return db.io.WriteAt(p, off)
 }
 
 func (db *DB) Begin(writable bool) (*Tx, error) {
@@ -288,7 +258,7 @@ func (db *DB) ReadAt(offset int64) (Node, error) {
 		return nil, errors.New("offset out of range")
 	}
 	var h Header
-	_, err := db.mmap.ReadAt(h[:], offset)
+	_, err := db.io.ReadAt(h[:], offset)
 	if err != nil {
 		return nil, err
 	}
@@ -302,7 +272,7 @@ func (db *DB) ReadAt(offset int64) (Node, error) {
 		}
 		nameLen := h.EntrySize()
 		name := make([]byte, nameLen)
-		_, err = db.mmap.ReadAt(name, n)
+		_, err = db.io.ReadAt(name, n)
 		if err != nil {
 			return nil, err
 		}
@@ -320,17 +290,16 @@ func (db *DB) ReadAt(offset int64) (Node, error) {
 	}
 	if h.IsKV() {
 		entryLen := h.EntrySize()
-		// 只分配一次缓冲区
 		buf := make([]byte, entryLen)
-		_, err = db.mmap.ReadAt(buf, n)
+		_, err = db.io.ReadAt(buf, n)
 		if err != nil {
 			return nil, err
 		}
 		bucketID := binary.LittleEndian.Uint32(buf[:4])
 		keyLen := binary.LittleEndian.Uint16(buf[4:6])
-		key := buf[6 : 6+keyLen] // 直接切片引用
+		key := buf[6 : 6+keyLen]
 		valueLen := binary.LittleEndian.Uint32(buf[6+keyLen : 10+keyLen])
-		value := buf[10+uint32(keyLen) : 10+uint32(keyLen)+valueLen] // 直接切片引用
+		value := buf[10+uint32(keyLen) : 10+uint32(keyLen)+valueLen]
 		checkSum := binary.LittleEndian.Uint32(buf[10+uint32(keyLen)+valueLen : 14+uint32(keyLen)+valueLen])
 		rr := &kvNode{
 			node: node{
@@ -389,6 +358,7 @@ func (db *DB) managed(writable bool, fn func(tx *Tx) error) (err error) {
 	err = fn(tx)
 	return
 }
+
 func (db *DB) Close() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -396,12 +366,13 @@ func (db *DB) Close() error {
 		return nil
 	}
 	db.closed = true
-	if err := db.mmap.Close(); err != nil {
+	if err := db.io.Close(); err != nil {
 		return err
 	}
 	close(db.stopCh)
 	return nil
 }
+
 func (db *DB) writeBucketNodeTree(tree *art.Tree[*bucketNode]) (int, error) {
 	if db.closed {
 		return 0, ErrDatabaseNotOpen

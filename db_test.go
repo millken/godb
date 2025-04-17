@@ -17,6 +17,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var (
+	testEngines = map[string]Option{
+		"File":   WithIoEngine(File),
+		"Mmap":   WithIoEngine(Mmap),
+		"Memory": WithIoEngine(Memory),
+	}
+)
+
 type benchmarkTestCase struct {
 	name string
 	size int
@@ -203,11 +211,11 @@ func BenchmarkDB_Put(b *testing.B) {
 		{"128B", 128},
 		{"256B", 256},
 		{"1K", 1024},
-		{"2K", 2048},
-		{"4K", 4096},
-		{"8K", 8192},
-		{"16K", 16384},
-		{"32K", 32768},
+		// {"2K", 2048},
+		// {"4K", 4096},
+		// {"8K", 8192},
+		// {"16K", 16384},
+		// {"32K", 32768},
 	}
 
 	variants := map[string][]Option{
@@ -218,31 +226,32 @@ func BenchmarkDB_Put(b *testing.B) {
 			WithFsync(true),
 		},
 	}
+	for engName, eng := range testEngines {
+		for name, options := range variants {
+			f, cleanup := mustTempFile()
+			defer cleanup()
+			options = append(options, eng)
+			db, err := Open(f, options...)
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer db.Close()
 
-	for name, options := range variants {
-		f, cleanup := mustTempFile()
-		defer cleanup()
+			for _, tt := range tests {
+				b.Run(tt.name+engName+name, func(b *testing.B) {
+					b.SetBytes(int64(tt.size))
 
-		db, err := Open(f, options...)
-		if err != nil {
-			b.Fatal(err)
-		}
-		defer db.Close()
-
-		for _, tt := range tests {
-			b.Run(tt.name+name, func(b *testing.B) {
-				b.SetBytes(int64(tt.size))
-
-				key := []byte("foo")
-				value := []byte(strings.Repeat(" ", tt.size))
-				b.ResetTimer()
-				for b.Loop() {
-					err := db.Put(key, value)
-					if err != nil {
-						b.Fatal(err)
+					key := []byte("foo")
+					value := []byte(strings.Repeat(" ", tt.size))
+					b.ResetTimer()
+					for b.Loop() {
+						err := db.Put(key, value)
+						if err != nil {
+							b.Fatal(err)
+						}
 					}
-				}
-			})
+				})
+			}
 		}
 	}
 }
@@ -259,40 +268,41 @@ func BenchmarkDB_Get(b *testing.B) {
 		{"16K", 16384},
 		{"32K", 32768},
 	}
+	for engName, eng := range testEngines {
+		for _, tt := range tests {
+			b.Run(tt.name+engName, func(b *testing.B) {
+				f, cleanup := mustTempFile()
+				defer cleanup()
 
-	for _, tt := range tests {
-		b.Run(tt.name, func(b *testing.B) {
-			f, cleanup := mustTempFile()
-			defer cleanup()
-
-			db, err := Open(f)
-			if err != nil {
-				b.Fatal(err)
-			}
-			defer db.Close()
-			b.SetBytes(int64(tt.size))
-
-			key := []byte("foo")
-			value := []byte(strings.Repeat(" ", tt.size))
-
-			err = db.Put(key, value)
-			if err != nil {
-				b.Fatal(err)
-			}
-
-			b.ResetTimer()
-			for b.Loop() {
-				val, err := db.Get(key)
+				db, err := Open(f, eng)
 				if err != nil {
 					b.Fatal(err)
 				}
-				if !bytes.Equal(val, value) {
-					b.Errorf("unexpected value")
+				defer db.Close()
+				b.SetBytes(int64(tt.size))
+
+				key := []byte("foo")
+				value := []byte(strings.Repeat(" ", tt.size))
+
+				err = db.Put(key, value)
+				if err != nil {
+					b.Fatal(err)
 				}
-			}
-			b.StopTimer()
-			db.Close()
-		})
+
+				b.ResetTimer()
+				for b.Loop() {
+					val, err := db.Get(key)
+					if err != nil {
+						b.Fatal(err)
+					}
+					if !bytes.Equal(val, value) {
+						b.Errorf("unexpected value")
+					}
+				}
+				b.StopTimer()
+				db.Close()
+			})
+		}
 	}
 }
 
@@ -318,8 +328,7 @@ func BenchmarkDB_Delete(b *testing.B) {
 		}
 	}
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := 0; b.Loop(); i++ {
 		if err = db.Delete(keys[i%keyCount]); err != nil {
 			b.Fatal(err)
 		}
@@ -334,12 +343,12 @@ func BenchmarkTxn_Put(b *testing.B) {
 	tests := []benchmarkTestCase{
 		{"128B", 128},
 		{"256B", 256},
-		{"1K", 1024},
-		{"2K", 2048},
-		{"4K", 4096},
-		{"8K", 8192},
-		{"16K", 16384},
-		{"32K", 32768},
+		// {"1K", 1024},
+		// {"2K", 2048},
+		// {"4K", 4096},
+		// {"8K", 8192},
+		// {"16K", 16384},
+		// {"32K", 32768},
 	}
 
 	variants := map[string][]Option{
@@ -350,34 +359,35 @@ func BenchmarkTxn_Put(b *testing.B) {
 			WithFsync(true),
 		},
 	}
+	for engName, eng := range testEngines {
+		for name, options := range variants {
+			f, cleanup := mustTempFile()
+			defer cleanup()
+			options = append(options, eng)
+			db, err := Open(f, options...)
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer db.Close()
 
-	for name, options := range variants {
-		f, cleanup := mustTempFile()
-		defer cleanup()
+			for _, tt := range tests {
+				b.Run(tt.name+engName+name, func(b *testing.B) {
+					b.SetBytes(int64(tt.size))
 
-		db, err := Open(f, options...)
-		if err != nil {
-			b.Fatal(err)
-		}
-		defer db.Close()
-
-		for _, tt := range tests {
-			b.Run(tt.name+name, func(b *testing.B) {
-				b.SetBytes(int64(tt.size))
-
-				key := []byte("foo")
-				value := []byte(strings.Repeat(" ", tt.size))
-				b.ResetTimer()
-				for i := 0; i < b.N; i++ {
-					db.Update(func(tx *Tx) error {
-						bc := tx.Bucket([]byte("test"))
-						if err := bc.Put(key, value); err != nil {
-							b.Fatal(err)
-						}
-						return nil
-					})
-				}
-			})
+					key := []byte("foo")
+					value := []byte(strings.Repeat(" ", tt.size))
+					b.ResetTimer()
+					for b.Loop() {
+						db.Update(func(tx *Tx) error {
+							bc := tx.Bucket([]byte("test"))
+							if err := bc.Put(key, value); err != nil {
+								b.Fatal(err)
+							}
+							return nil
+						})
+					}
+				})
+			}
 		}
 	}
 }
@@ -387,20 +397,22 @@ func BenchmarkTxn_BatchPut(b *testing.B) {
 	tests := []benchmarkTestCase{
 		{"128B", 128},
 		{"256B", 256},
-		{"1K", 1024},
-		{"2K", 2048},
-		{"4K", 4096},
-		{"8K", 8192},
-		{"16K", 16384},
-		{"32K", 32768},
+		// {"1K", 1024},
+		// {"2K", 2048},
+		// {"4K", 4096},
+		// {"8K", 8192},
+		// {"16K", 16384},
+		// {"32K", 32768},
 	}
 
 	variants := map[string][]Option{
 		"NoSync": {
 			WithFsync(false),
+			WithIoEngine(File),
 		},
 		"Sync": {
 			WithFsync(true),
+			WithIoEngine(File),
 		},
 	}
 
@@ -422,7 +434,7 @@ func BenchmarkTxn_BatchPut(b *testing.B) {
 				value := []byte(strings.Repeat(" ", tt.size))
 				b.ResetTimer()
 				db.Update(func(tx *Tx) error {
-					for i := 0; i < b.N; i++ {
+					for b.Loop() {
 						bc := tx.Bucket([]byte("test"))
 						if err := bc.Put(key, value); err != nil {
 							b.Fatal(err)

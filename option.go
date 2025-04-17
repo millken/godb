@@ -3,6 +3,8 @@ package godb
 import (
 	"hash/crc32"
 	"time"
+
+	"github.com/millken/godb/internal/bio"
 )
 
 const (
@@ -12,6 +14,14 @@ const (
 	GB = 1024 * MB
 )
 
+type IoEngine bio.BioEngine
+
+const (
+	File   IoEngine = IoEngine(bio.FileEngine)
+	Memory IoEngine = IoEngine(bio.MemoryEngine)
+	Mmap   IoEngine = IoEngine(bio.MmapEngine)
+)
+
 type Option func(*option)
 
 type option struct {
@@ -19,13 +29,16 @@ type option struct {
 	fsync bool
 	// segmentSize is the size of each segment
 	segmentSize int64
+	io          IoEngine
 	// compactionInterval is the interval for automatic compaction
 	compactionInterval time.Duration
 }
 
 func defaultOption() *option {
 	return &option{
-		fsync: false,
+		fsync:       false,
+		io:          Mmap,
+		segmentSize: 32 * MB,
 	}
 }
 func WithSegmentSize(s int64) Option {
@@ -33,6 +46,13 @@ func WithSegmentSize(s int64) Option {
 		o.segmentSize = s
 	}
 }
+
+func WithIoEngine(engine IoEngine) Option {
+	return func(o *option) {
+		o.io = engine
+	}
+}
+
 func WithFsync(fsync bool) Option {
 	return func(o *option) {
 		o.fsync = fsync
