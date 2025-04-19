@@ -72,10 +72,9 @@ func (db *DB) loadBuckets() error {
 			break
 		}
 		n := db.size.Load() + HeaderSize
-		if h.IsBucket() {
-			if h.IsDeleted() {
-				continue
-			}
+		if h.IsDeleted() {
+		} else if h.IsBucket() {
+
 			name := make([]byte, h.EntrySize())
 			_, err = db.io.ReadAt(name, n)
 			if err != nil {
@@ -128,6 +127,14 @@ func (db *DB) Put(key, value []byte) error {
 	if db.closed {
 		return ErrDatabaseNotOpen
 	}
+	// if key exists, update the state to deleted
+	if pos, found := db.def.idx.Get(key); found {
+		if err := db.updateStateWithPosition(pos, StateDeleted); err != nil {
+			return err
+		}
+		// db.def.idx.Delete(key)
+	}
+
 	rr := acquireKVNode()
 	defer releaseKVNode(rr)
 	rr.Set(0, key, value)
@@ -141,12 +148,14 @@ func (db *DB) Put(key, value []byte) error {
 	} else if n != buf.Len() {
 		return errors.New("write to mmap failed")
 	}
-	// 更新索引
 	db.def.idx.Put(key, db.size.Load())
-	// 更新大小
 	db.size.Add(int64(buf.Len()))
 
 	return db.sync()
+}
+
+func (db *DB) Size() int64 {
+	return db.size.Load()
 }
 
 func (db *DB) Get(key []byte) ([]byte, error) {
@@ -301,6 +310,9 @@ func (db *DB) ReadAt(offset int64) (Node, error) {
 		return bucket, nil
 	}
 	if h.IsKV() {
+		if h.IsDeleted() {
+			return nil, ErrKeyNotFound
+		}
 		entryLen := h.EntrySize()
 		buf := make([]byte, entryLen)
 		_, err = db.io.ReadAt(buf, n)
