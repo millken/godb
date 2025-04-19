@@ -13,13 +13,20 @@ const (
 	MB = 1024 * KB
 	GB = 1024 * MB
 )
+const (
+	// MaxKeySize is the maximum length of a key, in bytes.
+	MaxKeySize = 32768
 
-type IoEngine bio.BioEngine
+	// MaxValueSize is the maximum length of a value, in bytes.
+	MaxValueSize = (1 << 31) - 2
+)
+
+type IOStorage bio.Storage
 
 const (
-	File   IoEngine = IoEngine(bio.FileEngine)
-	Memory IoEngine = IoEngine(bio.MemoryEngine)
-	Mmap   IoEngine = IoEngine(bio.MmapEngine)
+	File   IOStorage = IOStorage(bio.FileStorage)
+	Memory IOStorage = IOStorage(bio.MemoryStorage)
+	Mmap   IOStorage = IOStorage(bio.MmapStorage)
 )
 
 type Option func(*option)
@@ -27,29 +34,29 @@ type Option func(*option)
 type option struct {
 	// fsync is used to sync the data to disk
 	fsync bool
-	// segmentSize is the size of each segment
-	segmentSize int64
-	io          IoEngine
+	// incrementSize is the size of each segment
+	incrementSize int64
+	io            IOStorage
 	// compactionInterval is the interval for automatic compaction
 	compactionInterval time.Duration
 }
 
 func defaultOption() *option {
 	return &option{
-		fsync:       false,
-		io:          Mmap,
-		segmentSize: 32 * MB,
+		fsync:         false,
+		io:            Mmap,
+		incrementSize: 256 * MB,
 	}
 }
-func WithSegmentSize(s int64) Option {
+func WithIncrementSize(s int64) Option {
 	return func(o *option) {
-		o.segmentSize = s
+		o.incrementSize = s
 	}
 }
 
-func WithIoEngine(engine IoEngine) Option {
+func WithStorage(s IOStorage) Option {
 	return func(o *option) {
-		o.io = engine
+		o.io = s
 	}
 }
 
@@ -78,5 +85,10 @@ func bucketID(name []byte) uint32 {
 }
 
 func validateKey(key []byte) error {
+	if len(key) == 0 {
+		return ErrKeyRequired
+	} else if len(key) > MaxKeySize {
+		return ErrKeyTooLarge
+	}
 	return nil
 }

@@ -36,7 +36,7 @@ func Open(dbpath string, options ...Option) (*DB, error) {
 	for _, opt := range options {
 		opt(opts)
 	}
-	io, err := bio.NewBio(bio.BioEngine(opts.io), dbpath, opts.segmentSize)
+	io, err := bio.NewBio(bio.Storage(opts.io), dbpath, opts.incrementSize)
 	if err != nil {
 		return nil, err
 	}
@@ -117,6 +117,12 @@ func (db *DB) loadBuckets() error {
 	return nil
 }
 func (db *DB) Put(key, value []byte) error {
+	if err := validateKey(key); err != nil {
+		return err
+	}
+	if len(value) > MaxValueSize {
+		return ErrValueTooLarge
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	if db.closed {
@@ -144,6 +150,9 @@ func (db *DB) Put(key, value []byte) error {
 }
 
 func (db *DB) Get(key []byte) ([]byte, error) {
+	if err := validateKey(key); err != nil {
+		return nil, err
+	}
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 	if db.closed {
@@ -161,6 +170,9 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 }
 
 func (db *DB) Delete(key []byte) error {
+	if err := validateKey(key); err != nil {
+		return err
+	}
 	idx, ok := db.def.idx.Get(key)
 	if !ok {
 		return nil
@@ -204,7 +216,7 @@ func (db *DB) updateStateWithPosition(pos int64, state State) error {
 
 func (db *DB) writeAt(p []byte, off int64) (int, error) {
 	if (off + int64(len(p))) > db.io.Size() {
-		size := db.io.Size() + db.opts.segmentSize
+		size := db.io.Size() + db.opts.incrementSize
 		if err := db.io.Truncate(size); err != nil {
 			return 0, err
 		}

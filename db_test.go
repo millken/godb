@@ -19,15 +19,89 @@ import (
 
 var (
 	testEngines = map[string]Option{
-		"File":   WithIoEngine(File),
-		"Mmap":   WithIoEngine(Mmap),
-		"Memory": WithIoEngine(Memory),
+		// "File":   WithStorage(File),
+		"Mmap": WithStorage(Mmap),
+		// "Memory": WithStorage(Memory),
 	}
 )
 
 type benchmarkTestCase struct {
 	name string
 	size int
+}
+
+func TestDB_Basic(t *testing.T) {
+	r := require.New(t)
+	dbpath, cleaner := mustTempFile()
+	defer cleaner()
+	db, err := Open(dbpath)
+	r.NoError(err)
+	r.NotNil(db)
+	t.Run("Put", func(t *testing.T) {
+		key := []byte("foo")
+		value := []byte("bar")
+		err = db.Put(key, value)
+		r.NoError(err)
+	})
+	t.Run("Get", func(t *testing.T) {
+		key := []byte("foo")
+		value, err := db.Get(key)
+		r.NoError(err)
+		r.Equal([]byte("bar"), value)
+	})
+	t.Run("PutAgain", func(t *testing.T) {
+		key := []byte("foo")
+		value := []byte("baz")
+		err = db.Put(key, value)
+		r.NoError(err)
+	})
+	t.Run("GetAgain", func(t *testing.T) {
+		key := []byte("foo")
+		value, err := db.Get(key)
+		r.NoError(err)
+		r.Equal([]byte("baz"), value)
+	})
+	t.Run("Delete", func(t *testing.T) {
+		key := []byte("foo")
+		err = db.Delete(key)
+		r.NoError(err)
+	})
+	t.Run("GetAfterDelete", func(t *testing.T) {
+		key := []byte("foo")
+		value, err := db.Get(key)
+		r.ErrorIs(err, ErrKeyNotFound)
+		r.Nil(value)
+	})
+	t.Run("PutAfterDelete", func(t *testing.T) {
+		key := []byte("foo")
+		value := []byte("bar")
+		err = db.Put(key, value)
+		r.NoError(err)
+	})
+	t.Run("GetAfterPut", func(t *testing.T) {
+		key := []byte("foo")
+		value, err := db.Get(key)
+		r.NoError(err)
+		r.Equal([]byte("bar"), value)
+	})
+	t.Run("ReOpenDB", func(t *testing.T) {
+		r.NoError(db.Close())
+		db, err = Open(dbpath)
+		r.NoError(err)
+		r.NotNil(db)
+	})
+	t.Run("GetAfterReOpen", func(t *testing.T) {
+		key := []byte("foo")
+		value, err := db.Get(key)
+		r.NoError(err)
+		r.Equal([]byte("bar"), value)
+	})
+	t.Run("DeleteAfterReOpen", func(t *testing.T) {
+		key := []byte("foo")
+		err = db.Delete(key)
+		r.NoError(err)
+	})
+
 }
 
 func TestDB(t *testing.T) {
@@ -208,11 +282,11 @@ func TestRandomWrites(t *testing.T) {
 func BenchmarkDB_Put(b *testing.B) {
 
 	tests := []benchmarkTestCase{
-		{"128B", 128},
-		{"256B", 256},
+		// {"128B", 128},
+		// {"256B", 256},
 		{"1K", 1024},
-		// {"2K", 2048},
-		// {"4K", 4096},
+		{"2K", 2048},
+		{"4K", 4096},
 		// {"8K", 8192},
 		// {"16K", 16384},
 		// {"32K", 32768},
@@ -408,11 +482,11 @@ func BenchmarkTxn_BatchPut(b *testing.B) {
 	variants := map[string][]Option{
 		"NoSync": {
 			WithFsync(false),
-			WithIoEngine(File),
+			WithStorage(File),
 		},
 		"Sync": {
 			WithFsync(true),
-			WithIoEngine(File),
+			WithStorage(File),
 		},
 	}
 

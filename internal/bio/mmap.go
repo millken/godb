@@ -4,6 +4,7 @@ import (
 	"os"
 
 	"github.com/edsrzf/mmap-go"
+	"golang.org/x/sys/unix"
 )
 
 var _ Bio = (*Mmap)(nil)
@@ -33,6 +34,7 @@ func NewMmap(path string, size int64) (*Mmap, error) {
 	if err != nil {
 		return nil, err
 	}
+	_ = unix.Madvise(data, unix.MADV_WILLNEED)
 	return &Mmap{
 		fd:   file,
 		data: data,

@@ -8,7 +8,7 @@ import (
 
 func TestBio(t *testing.T) {
 	t.Run("FileEngine", func(t *testing.T) {
-		bio, err := NewBio(FileEngine, "testfile", 1024)
+		bio, err := NewBio(FileStorage, "testfile", 1024)
 		if err != nil {
 			t.Fatalf("NewBio(FileEngine) failed: %v", err)
 		}
@@ -23,7 +23,7 @@ func TestBio(t *testing.T) {
 	})
 
 	t.Run("MemoryEngine", func(t *testing.T) {
-		bio, err := NewBio(MemoryEngine, "", 1024)
+		bio, err := NewBio(MemoryStorage, "", 1024)
 		if err != nil {
 			t.Fatalf("NewBio(MemoryEngine) failed: %v", err)
 		}
@@ -38,7 +38,7 @@ func TestBio(t *testing.T) {
 	})
 
 	t.Run("MmapEngine", func(t *testing.T) {
-		bio, err := NewBio(MmapEngine, "testmmap", 1024)
+		bio, err := NewBio(MmapStorage, "testmmap", 1024)
 		if err != nil {
 			t.Fatalf("NewBio(MmapEngine) failed: %v", err)
 		}
@@ -58,7 +58,7 @@ func TestBio(t *testing.T) {
 		}
 	})
 	t.Run("InvalidSize", func(t *testing.T) {
-		_, err := NewBio(FileEngine, "", -1)
+		_, err := NewBio(FileStorage, "", -1)
 		if err == nil {
 			t.Fatalf("Expected error for invalid size, got nil")
 		}

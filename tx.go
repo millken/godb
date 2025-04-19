@@ -77,12 +77,10 @@ func (tx *Tx) Commit() error {
 	}
 	tx.size = tx.db.size.Load()
 	var (
-		err     error
-		size, n int
+		err error
 	)
 	if (tx.buckets.Len() > 0) && tx.writable {
-		n, err = tx.db.writeBucketNodeTree(tx.buckets)
-		size += n
+		_, err = tx.db.writeBucketNodeTree(tx.buckets)
 		if err != nil {
 			tx.rollback()
 		}
@@ -90,8 +88,7 @@ func (tx *Tx) Commit() error {
 	if (tx.committed.Len() > 0) && tx.writable {
 		// If this operation fails then the write did failed and we must
 		// rollback.
-		n, err = tx.db.writeKvNodeTree(tx.committed)
-		size += n
+		_, err = tx.db.writeKvNodeTree(tx.committed)
 		if err != nil {
 			tx.rollback()
 		}
@@ -131,6 +128,12 @@ func (tx *Tx) rollback() {
 }
 
 func (tx *Tx) put(bucketID uint32, key, value []byte) error {
+	if err := validateKey(key); err != nil {
+		return err
+	}
+	if len(value) > MaxValueSize {
+		return ErrValueTooLarge
+	}
 	rr := newKVNode()
 	rr.Set(bucketID, key, value)
 	tx.committed.Put(key, rr)
@@ -161,4 +164,31 @@ func (tx *Tx) get(idx *art.Tree[int64], key []byte) ([]byte, error) {
 	}
 
 	return r.Value(), nil
+}
+
+func (tx *Tx) delete(idx *art.Tree[int64], key []byte) error {
+	if err := validateKey(key); err != nil {
+		return err
+	}
+	if tx.db == nil {
+		return ErrTxClosed
+	}
+	if !tx.writable {
+		return ErrTxNotWritable
+	}
+	_, found := tx.committed.Get(key)
+	if found {
+		tx.committed.Delete(key)
+		return nil
+	}
+	pos, found := idx.Get(key)
+	if !found {
+		return nil
+	}
+	if idx.Delete(key) {
+		if err := tx.db.updateStateWithPosition(pos, StateDeleted); err != nil {
+			return err
+		}
+	}
+	return nil
 }

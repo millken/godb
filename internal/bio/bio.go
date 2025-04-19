@@ -2,12 +2,12 @@ package bio
 
 import "errors"
 
-type BioEngine int
+type Storage int
 
 const (
-	FileEngine BioEngine = iota
-	MemoryEngine
-	MmapEngine
+	FileStorage Storage = iota
+	MemoryStorage
+	MmapStorage
 )
 
 var (
@@ -23,15 +23,15 @@ type Bio interface {
 	Size() int64
 }
 
-func NewBio(engine BioEngine, path string, size int64) (Bio, error) {
-	switch engine {
-	case FileEngine:
+func NewBio(s Storage, path string, size int64) (Bio, error) {
+	switch s {
+	case FileStorage:
 		return NewFile(path, size)
-	case MemoryEngine:
+	case MemoryStorage:
 		return NewMemory(size)
-	case MmapEngine:
+	case MmapStorage:
 		return NewMmap(path, size)
 	default:
-		return nil, errors.New("unsupported bio engine")
+		return nil, errors.New("unsupported bio storage")
 	}
 }
