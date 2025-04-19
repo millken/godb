@@ -4,6 +4,7 @@ import art "github.com/millken/godb/internal/radixtree"
 
 type Bucket struct {
 	tx     *Tx
+	name   []byte
 	bucket uint32
 	idx    *art.Tree[int64]
 }

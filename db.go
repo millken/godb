@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,19 +17,18 @@ import (
 )
 
 type DB struct {
-	path               string
-	opts               *option
-	io                 bio.Bio
-	buckets            *xsync.Map[uint32, *Bucket]
-	def                *Bucket
-	size               atomic.Int64
-	mu                 sync.RWMutex
-	closed             bool
-	compactionInterval time.Duration
-	compacting         atomic.Bool
-	compactCh          chan struct{}
-	stopCh             chan struct{}
-	wg                 sync.WaitGroup
+	path       string
+	opts       *option
+	io         bio.Bio
+	buckets    *xsync.Map[uint32, *Bucket]
+	bucket     *Bucket
+	size       atomic.Int64
+	mu         sync.RWMutex
+	closed     bool
+	compacting atomic.Bool
+	compactCh  chan struct{}
+	stopCh     chan struct{}
+	wg         sync.WaitGroup
 }
 
 // Open opens a database at the given path.
@@ -45,23 +46,22 @@ func Open(dbpath string, options ...Option) (*DB, error) {
 		opts:    opts,
 		io:      io,
 		buckets: xsync.NewMap[uint32, *Bucket](),
-		def: &Bucket{
+		bucket: &Bucket{
 			bucket: 0,
 			idx:    art.New[int64](),
 		},
-		compactionInterval: 1 * time.Hour, // 默认1小时压缩一次
-		compactCh:          make(chan struct{}),
-		stopCh:             make(chan struct{}),
+		compactCh: make(chan struct{}),
+		stopCh:    make(chan struct{}),
 	}
 	if err = db.loadBuckets(); err != nil {
 		return nil, err
 	}
+	db.wg.Add(1)
+	go db.compactionLoop()
 	return db, nil
 }
 
 func (db *DB) loadBuckets() error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
 	for db.size.Load() < db.io.Size() {
 		var h Header
 		_, err := db.io.ReadAt(h[:], db.size.Load())
@@ -83,6 +83,7 @@ func (db *DB) loadBuckets() error {
 			id := bucketID(name)
 			bucket := &Bucket{
 				bucket: id,
+				name:   name,
 				idx:    art.New[int64](),
 			}
 			db.buckets.Store(id, bucket)
@@ -101,7 +102,7 @@ func (db *DB) loadBuckets() error {
 				return err
 			}
 			if bucketID == 0 {
-				db.def.idx.Put(key, db.size.Load())
+				db.bucket.idx.Put(key, db.size.Load())
 			} else {
 				bucket, found := db.buckets.Load(bucketID)
 				if !found {
@@ -128,7 +129,7 @@ func (db *DB) Put(key, value []byte) error {
 		return ErrDatabaseNotOpen
 	}
 	// if key exists, update the state to deleted
-	if pos, found := db.def.idx.Get(key); found {
+	if pos, found := db.bucket.idx.Get(key); found {
 		if err := db.updateStateWithPosition(pos, StateDeleted); err != nil {
 			return err
 		}
@@ -148,7 +149,7 @@ func (db *DB) Put(key, value []byte) error {
 	} else if n != buf.Len() {
 		return errors.New("write to mmap failed")
 	}
-	db.def.idx.Put(key, db.size.Load())
+	db.bucket.idx.Put(key, db.size.Load())
 	db.size.Add(int64(buf.Len()))
 
 	return db.sync()
@@ -167,7 +168,7 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	if db.closed {
 		return nil, ErrDatabaseNotOpen
 	}
-	pos, found := db.def.idx.Get(key)
+	pos, found := db.bucket.idx.Get(key)
 	if !found {
 		return nil, ErrKeyNotFound
 	}
@@ -182,7 +183,7 @@ func (db *DB) Delete(key []byte) error {
 	if err := validateKey(key); err != nil {
 		return err
 	}
-	idx, ok := db.def.idx.Get(key)
+	idx, ok := db.bucket.idx.Get(key)
 	if !ok {
 		return nil
 	}
@@ -195,7 +196,7 @@ func (db *DB) Delete(key []byte) error {
 	if err := db.updateStateWithPosition(idx, StateDeleted); err != nil {
 		return err
 	}
-	db.def.idx.Delete(key)
+	db.bucket.idx.Delete(key)
 
 	return db.sync()
 }
@@ -269,6 +270,24 @@ func (db *DB) writeRR(rr Node) (int, error) {
 	}
 	db.size.Add(int64(n))
 	return n, nil
+}
+
+func (db *DB) readHeaderAt(off int64) (Header, error) {
+	if db.closed {
+		return Header{}, ErrDatabaseNotOpen
+	}
+	if off < 0 || off >= db.size.Load() {
+		return Header{}, errors.New("offset out of range")
+	}
+	var h Header
+	_, err := db.io.ReadAt(h[:], off)
+	if err != nil {
+		return Header{}, err
+	}
+	if !h.isValid() {
+		return Header{}, ErrInvalidRecord
+	}
+	return h, nil
 }
 
 func (db *DB) ReadAt(offset int64) (Node, error) {
@@ -386,6 +405,8 @@ func (db *DB) managed(writable bool, fn func(tx *Tx) error) (err error) {
 func (db *DB) Close() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	close(db.stopCh)
+	db.wg.Wait()
 	if db.closed {
 		return nil
 	}
@@ -393,7 +414,6 @@ func (db *DB) Close() error {
 	if err := db.io.Close(); err != nil {
 		return err
 	}
-	close(db.stopCh)
 	return nil
 }
 
@@ -444,13 +464,147 @@ func (db *DB) TriggerCompaction() {
 	}
 }
 
-// Compact 执行数据库压缩操作，优化锁定策略
+// Compact Perform database compression operations, delete deleted records, and optimize storage space
 func (db *DB) Compact() error {
-	// 确保同一时间只有一个压缩任务
 	if !db.compacting.CompareAndSwap(false, true) {
 		return nil
 	}
 	defer db.compacting.Store(false)
 
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tmpPath := db.path + ".compact"
+	defer os.Remove(tmpPath)
+
+	var size int64
+	tmpIO, err := bio.NewBio(bio.Storage(db.opts.io), tmpPath, db.opts.incrementSize)
+	if err != nil {
+		return fmt.Errorf("create bio failed: %w", err)
+	}
+	defer tmpIO.Close()
+
+	var buckets []*Bucket
+	db.buckets.Range(func(id uint32, b *Bucket) bool {
+		buckets = append(buckets, b)
+		return true
+	})
+
+	// 写入所有Bucket的元数据到临时文件
+	for _, b := range buckets {
+		bn := &bucketNode{
+			ID:   b.bucket,
+			Name: b.name,
+		}
+		bn.Hdr.EncodeState(TypeBucket, StateNormal)
+		bn.Hdr.SetEntrySize(uint32(len(b.name)))
+
+		buf := bytebufferpool.Get()
+		if err = bn.MarshalToBuffer(buf); err != nil {
+			bytebufferpool.Put(buf)
+			return err
+		}
+
+		if _, err = tmpIO.WriteAt(buf.Bytes(), size); err != nil {
+			bytebufferpool.Put(buf)
+			return err
+		}
+		size += int64(buf.Len())
+		bytebufferpool.Put(buf)
+	}
+
+	writeValidKV := func(bucketID uint32, idx *art.Tree[int64]) error {
+		for _, pos := range idx.Iter() {
+			var (
+				n   int
+				hdr Header
+			)
+			hdr, err = db.readHeaderAt(pos)
+			if err != nil {
+				return err
+			}
+			buf := make([]byte, hdr.EntrySize()+HeaderSize)
+			n, err = db.io.ReadAt(buf, pos)
+			if err != nil {
+				return err
+			}
+			if n != int(hdr.EntrySize()+HeaderSize) {
+				return fmt.Errorf("read data length mismatch: %d != %d", n, hdr.EntrySize()+HeaderSize)
+			}
+			if _, err = tmpIO.WriteAt(buf, size); err != nil {
+				return err
+			}
+			size += int64(len(buf))
+		}
+		return nil
+	}
+
+	if err = writeValidKV(0, db.bucket.idx); err != nil {
+		return fmt.Errorf("process default bucket failed: %w", err)
+	}
+
+	for _, b := range buckets {
+		if err = writeValidKV(b.bucket, b.idx); err != nil {
+			return fmt.Errorf("process bucket %d failed: %w", b.bucket, err)
+		}
+	}
+
+	if err = tmpIO.Sync(); err != nil {
+		return fmt.Errorf("sync tmp file failed: %w", err)
+	}
+
+	if err = db.io.Close(); err != nil {
+		return fmt.Errorf("close original file failed: %w", err)
+	}
+
+	if err = os.Rename(tmpPath, db.path); err != nil {
+		return fmt.Errorf("rename tmp file failed: %w", err)
+	}
+
+	newIO, err := bio.NewBio(bio.Storage(db.opts.io), db.path, db.opts.incrementSize)
+	if err != nil {
+		return fmt.Errorf("open new file failed: %w", err)
+	}
+	db.io = newIO
+
+	db.size.Store(0)
+	db.buckets = xsync.NewMap[uint32, *Bucket]()
+	db.bucket = &Bucket{
+		bucket: 0,
+		idx:    art.New[int64](),
+	}
+	if err := db.loadBuckets(); err != nil {
+		return fmt.Errorf("load buckets after compaction failed: %w", err)
+	}
+
 	return nil
+}
+
+func (db *DB) compactionLoop() {
+	defer db.wg.Done()
+	var ticker *time.Ticker
+	var tickerC <-chan time.Time
+
+	// Create a timer only if automatic compression is enabled
+	if db.opts.compactionInterval > 0 {
+		ticker = time.NewTicker(db.opts.compactionInterval)
+		defer ticker.Stop()
+		tickerC = ticker.C
+	}
+
+	for {
+		select {
+		case <-tickerC:
+			if err := db.Compact(); err != nil {
+				log.Printf("Compaction error: %v", err)
+			}
+		case <-db.compactCh:
+			// triggered by user
+			if err := db.Compact(); err != nil {
+				log.Printf("Manual compaction error: %v", err)
+			}
+		case <-db.stopCh:
+			return
+		}
+	}
 }

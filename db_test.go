@@ -125,7 +125,21 @@ func TestDB_Basic(t *testing.T) {
 		r.Nil(value)
 		t.Log(db.Size())
 	})
-
+	t.Run("PutAgain", func(t *testing.T) {
+		key := []byte("foo")
+		value := []byte("bar")
+		err = db.Put(key, value)
+		r.NoError(err)
+		t.Log(db.Size())
+	})
+	t.Run("Compact", func(t *testing.T) {
+		err = db.Compact()
+		r.NoError(err)
+		t.Log(db.Size())
+		value, err := db.Get([]byte("foo"))
+		r.NoError(err)
+		r.Equal([]byte("bar"), value)
+	})
 }
 
 func TestDB(t *testing.T) {
@@ -396,7 +410,6 @@ func BenchmarkDB_Get(b *testing.B) {
 					}
 				}
 				b.StopTimer()
-				db.Close()
 			})
 		}
 	}

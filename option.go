@@ -43,9 +43,10 @@ type option struct {
 
 func defaultOption() *option {
 	return &option{
-		fsync:         false,
-		io:            Mmap,
-		incrementSize: 256 * MB,
+		fsync:              false,
+		io:                 Mmap,
+		incrementSize:      4 * MB,
+		compactionInterval: 1 * time.Hour,
 	}
 }
 func WithIncrementSize(s int64) Option {
