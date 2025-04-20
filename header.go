@@ -40,10 +40,8 @@ func CombineState(typ State, state State) State {
 type Header [HeaderSize]byte
 
 func (h Header) isValid() bool {
-	if h.IsBucket() || h.IsKV() {
-		return true
-	}
-	return false
+	t := h.StateType()
+	return t == TypeBucket || t == TypeKV
 }
 
 func (h Header) EntrySize() uint32 {
@@ -80,15 +78,16 @@ func (h Header) StateRecord() State {
 	return h.State() & StateMask // 取低4位作为记录状态
 }
 
+// 内联常用操作
 func (h Header) IsBucket() bool {
-	return h.StateType() == TypeBucket
+	return (State(h[0]) & TypeMask) == TypeBucket
 }
 
 func (h Header) IsKV() bool {
-	return h.StateType() == TypeKV
+	return (State(h[0]) & TypeMask) == TypeKV
 }
 
-func (h Header) IsPutted() bool {
+func (h Header) IsNormal() bool {
 	return h.StateRecord() == StateNormal
 }
 

@@ -392,12 +392,12 @@ func (node *radixNode[T]) compress() {
 		return
 	}
 	edge := node.edges[0]
-	var b bytes.Buffer
-	b.Grow(len(node.prefix) + 1 + len(edge.node.prefix))
-	b.Write(node.prefix)
-	b.WriteByte(edge.radix)
-	b.Write(edge.node.prefix)
-	node.prefix = b.Bytes()
+	newPrefix := make([]byte, len(node.prefix)+1+len(edge.node.prefix))
+	i := copy(newPrefix, node.prefix)
+	newPrefix[i] = edge.radix
+	copy(newPrefix[i+1:], edge.node.prefix)
+
+	node.prefix = newPrefix
 	node.leaf = edge.node.leaf
 	node.edges = edge.node.edges
 }

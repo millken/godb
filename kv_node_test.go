@@ -16,7 +16,7 @@ func TestKVNode(t *testing.T) {
 	r.Equal(uint32(1), rec.BucketID())
 	r.Equal(crc32.ChecksumIEEE(value), rec.checkSum)
 	r.False(rec.Hdr.IsBucket())
-	r.True(rec.Hdr.IsPutted())
+	r.True(rec.Hdr.IsNormal())
 	buf := bytebufferpool.Get()
 	rec.MarshalToBuffer(buf)
 	r.Equal(int(rec.Size()), buf.Len())

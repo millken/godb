@@ -69,6 +69,28 @@ func (tx *Tx) OpenBucket(name []byte) (*Bucket, error) {
 	return b, nil
 }
 
+func (tx *Tx) DeleteBucket(name []byte) error {
+	if tx.db == nil {
+		return ErrTxClosed
+	}
+	if !tx.writable {
+		return ErrTxNotWritable
+	}
+	b, found := tx.db.buckets.Load(bucketID(name))
+	if !found {
+		return ErrBucketNotFound
+	}
+	n, found := b.idx.Get(name)
+	if !found {
+		return ErrBucketNotFound
+	}
+	if err := tx.db.updateStateWithPosition(n, StateDeleted); err != nil {
+		return err
+	}
+	tx.buckets.Delete(name)
+	return nil
+}
+
 func (tx *Tx) Commit() error {
 	if tx.db == nil {
 		return ErrTxClosed

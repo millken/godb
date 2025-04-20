@@ -1,6 +1,7 @@
 package godb
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -27,7 +28,8 @@ type DB struct {
 	closed     bool
 	compacting atomic.Bool
 	compactCh  chan struct{}
-	stopCh     chan struct{}
+	ctx        context.Context
+	stopFn     context.CancelFunc
 	wg         sync.WaitGroup
 }
 
@@ -41,6 +43,7 @@ func Open(dbpath string, options ...Option) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	db := &DB{
 		path:    dbpath,
 		opts:    opts,
@@ -51,7 +54,8 @@ func Open(dbpath string, options ...Option) (*DB, error) {
 			idx:    art.New[int64](),
 		},
 		compactCh: make(chan struct{}),
-		stopCh:    make(chan struct{}),
+		ctx:       ctx,
+		stopFn:    cancel,
 	}
 	if err = db.loadBuckets(); err != nil {
 		return nil, err
@@ -405,7 +409,7 @@ func (db *DB) managed(writable bool, fn func(tx *Tx) error) (err error) {
 func (db *DB) Close() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	close(db.stopCh)
+	db.stopFn()
 	db.wg.Wait()
 	if db.closed {
 		return nil
@@ -423,7 +427,7 @@ func (db *DB) writeBucketNodeTree(tree *art.Tree[*bucketNode]) (int, error) {
 	}
 	l := 0
 	for _, val := range tree.Iter() {
-		if val.Header().IsPutted() {
+		if val.Header().IsNormal() {
 			n, err := db.writeRR(val)
 			l += n
 			if err != nil {
@@ -442,7 +446,7 @@ func (db *DB) writeKvNodeTree(tree *art.Tree[*kvNode]) (int, error) {
 	}
 	l := 0
 	for _, val := range tree.Iter() {
-		if val.Header().IsPutted() {
+		if val.Header().IsNormal() {
 			n, err := db.writeRR(val)
 			l += n
 			if err != nil {
@@ -513,7 +517,7 @@ func (db *DB) Compact() error {
 		bytebufferpool.Put(buf)
 	}
 
-	writeValidKV := func(bucketID uint32, idx *art.Tree[int64]) error {
+	writeValidKV := func(idx *art.Tree[int64]) error {
 		for _, pos := range idx.Iter() {
 			var (
 				n   int
@@ -539,12 +543,12 @@ func (db *DB) Compact() error {
 		return nil
 	}
 
-	if err = writeValidKV(0, db.bucket.idx); err != nil {
+	if err = writeValidKV(db.bucket.idx); err != nil {
 		return fmt.Errorf("process default bucket failed: %w", err)
 	}
 
 	for _, b := range buckets {
-		if err = writeValidKV(b.bucket, b.idx); err != nil {
+		if err = writeValidKV(b.idx); err != nil {
 			return fmt.Errorf("process bucket %d failed: %w", b.bucket, err)
 		}
 	}
@@ -603,7 +607,7 @@ func (db *DB) compactionLoop() {
 			if err := db.Compact(); err != nil {
 				log.Printf("Manual compaction error: %v", err)
 			}
-		case <-db.stopCh:
+		case <-db.ctx.Done():
 			return
 		}
 	}
