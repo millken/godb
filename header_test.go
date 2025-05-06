@@ -3,11 +3,11 @@ package godb
 import (
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/dnsoa/go/assert"
 )
 
 func TestHeader(t *testing.T) {
-	r := require.New(t)
+	r := assert.New(t)
 	var hdr Header
 	hdr.SetEntrySize(100)
 	hdr.SetType(TypeBucket)

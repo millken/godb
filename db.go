@@ -452,8 +452,18 @@ func (db *DB) writeKvNodeTree(tree *art.Tree[*kvNode]) (int, error) {
 			if err != nil {
 				return l, err
 			}
-		} else {
-
+		} else if val.Header().IsDeleted() {
+			bucket, found := db.buckets.Load(val.BucketID())
+			if !found {
+				return l, errors.New("bucket not found")
+			}
+			pos, found := bucket.idx.Get(val.key)
+			if found {
+				if err := db.updateStateWithPosition(pos, StateDeleted); err != nil {
+					return l, err
+				}
+				bucket.idx.Delete(val.key)
+			}
 		}
 	}
 	return l, nil

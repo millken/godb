@@ -49,9 +49,6 @@ func (h Header) EntrySize() uint32 {
 }
 
 func (h *Header) SetEntrySize(size uint32) {
-	if size == 0 {
-		panic("entry size cannot be zero")
-	}
 	binary.LittleEndian.PutUint32(h[1:], size)
 }
 func (h *Header) EncodeState(t State, s State) {

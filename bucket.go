@@ -18,5 +18,5 @@ func (b *Bucket) Get(key []byte) ([]byte, error) {
 }
 
 func (b *Bucket) Delete(key []byte) error {
-	return nil
+	return b.tx.delete(b.bucket, b.idx, key)
 }

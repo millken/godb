@@ -4,12 +4,12 @@ import (
 	"hash/crc32"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/dnsoa/go/assert"
 	"github.com/valyala/bytebufferpool"
 )
 
 func TestKVNode(t *testing.T) {
-	r := require.New(t)
+	r := assert.New(t)
 	key, value := []byte("foo"), []byte("bar")
 	rec := acquireKVNode()
 	rec.Set(1, key, value)

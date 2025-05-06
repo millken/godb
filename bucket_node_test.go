@@ -4,12 +4,12 @@ import (
 	"hash/crc32"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/dnsoa/go/assert"
 	"github.com/valyala/bytebufferpool"
 )
 
 func TestBucketNode(t *testing.T) {
-	r := require.New(t)
+	r := assert.New(t)
 	bucketName := []byte("foo")
 	b := newBucket(bucketName)
 	r.Equal(crc32.ChecksumIEEE(bucketName), b.ID)

@@ -6,7 +6,6 @@ import (
 
 type Tx struct {
 	db        *DB // the underlying database.
-	bucket    uint32
 	size      int64
 	writable  bool // when false mutable operations fail.
 	committed *art.Tree[*kvNode]
@@ -178,7 +177,7 @@ func (tx *Tx) get(idx *art.Tree[int64], key []byte) ([]byte, error) {
 
 	pos, found := idx.Get(key)
 	if !found {
-		return nil, nil
+		return nil, ErrKeyNotFound
 	}
 	r, err := tx.db.ReadAt(pos)
 	if err != nil {
@@ -188,7 +187,7 @@ func (tx *Tx) get(idx *art.Tree[int64], key []byte) ([]byte, error) {
 	return r.Value(), nil
 }
 
-func (tx *Tx) delete(idx *art.Tree[int64], key []byte) error {
+func (tx *Tx) delete(bucketID uint32, idx *art.Tree[int64], key []byte) error {
 	if err := validateKey(key); err != nil {
 		return err
 	}
@@ -198,19 +197,27 @@ func (tx *Tx) delete(idx *art.Tree[int64], key []byte) error {
 	if !tx.writable {
 		return ErrTxNotWritable
 	}
-	_, found := tx.committed.Get(key)
+	ct, found := tx.committed.Get(key)
 	if found {
-		tx.committed.Delete(key)
+		if ct.Hdr.IsKV() && !ct.Hdr.IsDeleted() {
+			ct.Hdr.SetRecord(StateDeleted)
+		}
 		return nil
 	}
-	pos, found := idx.Get(key)
+	_, found = idx.Get(key)
 	if !found {
 		return nil
 	}
-	if idx.Delete(key) {
-		if err := tx.db.updateStateWithPosition(pos, StateDeleted); err != nil {
-			return err
-		}
-	}
+
+	rr := newKVNode()
+	rr.Set(bucketID, key, nil)
+	rr.Hdr.SetRecord(StateDeleted)
+	tx.committed.Put(key, rr)
+
+	// if idx.Delete(key) {
+	// 	if err := tx.db.updateStateWithPosition(pos, StateDeleted); err != nil {
+	// 		return err
+	// 	}
+	// }
 	return nil
 }

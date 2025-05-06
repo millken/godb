@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/dnsoa/go/assert"
 )
 
 var (
@@ -31,7 +31,7 @@ type benchmarkTestCase struct {
 }
 
 func TestDB_Basic(t *testing.T) {
-	r := require.New(t)
+	r := assert.New(t)
 	dbpath, cleaner := mustTempFile()
 	defer cleaner()
 	db, err := Open(dbpath, WithStorage(File))
@@ -74,7 +74,7 @@ func TestDB_Basic(t *testing.T) {
 	t.Run("GetAfterDelete", func(t *testing.T) {
 		key := []byte("foo")
 		value, err := db.Get(key)
-		r.ErrorIs(err, ErrKeyNotFound)
+		r.Equal(ErrKeyNotFound, err)
 		r.Nil(value)
 		t.Log(db.Size())
 	})
@@ -111,7 +111,7 @@ func TestDB_Basic(t *testing.T) {
 		err = db.Delete(key)
 		r.NoError(err)
 		value, err := db.Get(key)
-		r.ErrorIs(err, ErrKeyNotFound)
+		r.Equal(ErrKeyNotFound, err)
 		r.Nil(value)
 		t.Log(db.Size())
 	})
@@ -121,7 +121,7 @@ func TestDB_Basic(t *testing.T) {
 		db, err = Open(dbpath)
 		r.NoError(err)
 		value, err := db.Get(key)
-		r.ErrorIs(err, ErrKeyNotFound)
+		r.Equal(ErrKeyNotFound, err)
 		r.Nil(value)
 		t.Log(db.Size())
 	})
@@ -143,7 +143,7 @@ func TestDB_Basic(t *testing.T) {
 }
 
 func TestDB(t *testing.T) {
-	r := require.New(t)
+	r := assert.New(t)
 	dbpath := path.Join(".", "_godb")
 	db, err := Open(dbpath)
 	r.NoError(err)
@@ -184,18 +184,60 @@ func TestDB(t *testing.T) {
 		}
 		return nil
 	})
-
+	err = db.View(func(tx *Tx) error {
+		b, err := tx.OpenBucket([]byte("test"))
+		if err != nil {
+			return err
+		}
+		for i := range 100 {
+			key := fmt.Appendf(nil, "%016d", i)
+			err := b.Delete(key)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	r.Equal(ErrTxNotWritable, err)
+	err = db.Update(func(tx *Tx) error {
+		b, err := tx.OpenBucket([]byte("test"))
+		if err != nil {
+			return err
+		}
+		for i := range 100 {
+			key := fmt.Appendf(nil, "%016d", i)
+			err := b.Delete(key)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	r.NoError(err)
+	db.View(func(tx *Tx) error {
+		b, err := tx.OpenBucket([]byte("test"))
+		if err != nil {
+			return err
+		}
+		for i := range 100 {
+			key := fmt.Appendf(nil, "%016d", i)
+			value, err := b.Get(key)
+			r.Equal(ErrKeyNotFound, err)
+			r.Nil(value)
+		}
+		return nil
+	})
 }
 
 func TestDB_Concurrent(t *testing.T) {
-	require := require.New(t)
+	r := assert.New(t)
 	f, cleanup := mustTempFile()
 
 	db, err := Open(f)
-	require.NoError(err)
-	require.NotNil(db)
+	r.NoError(err)
+	r.NotNil(db)
 	defer func() {
-		require.NoError(db.Close())
+		r.NoError(db.Close())
 		cleanup()
 	}()
 
@@ -266,11 +308,11 @@ func TestDB_Concurrent(t *testing.T) {
 }
 
 func TestRandomWrites(t *testing.T) {
-	require := require.New(t)
+	r := assert.New(t)
 	f, cleanup := mustTempFile()
 	defer cleanup()
 	db, err := Open(f)
-	require.NoError(err)
+	r.NoError(err)
 
 	keys := [64][]byte{}
 	wants := [64]int{}
@@ -313,7 +355,7 @@ func TestRandomWrites(t *testing.T) {
 		}
 	}
 
-	require.NoError(db.Close())
+	r.NoError(db.Close())
 }
 func BenchmarkDB_Put(b *testing.B) {
 
