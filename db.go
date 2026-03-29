@@ -187,14 +187,14 @@ func (db *DB) Delete(key []byte) error {
 	if err := validateKey(key); err != nil {
 		return err
 	}
-	idx, ok := db.bucket.idx.Get(key)
-	if !ok {
-		return nil
-	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	if db.closed {
 		return ErrDatabaseNotOpen
+	}
+	idx, ok := db.bucket.idx.Get(key)
+	if !ok {
+		return nil
 	}
 	// 更新记录
 	if err := db.updateStateWithPosition(idx, StateDeleted); err != nil {
@@ -433,8 +433,17 @@ func (db *DB) writeBucketNodeTree(tree *art.Tree[*bucketNode]) (int, error) {
 			if err != nil {
 				return l, err
 			}
+			// Register the new bucket in db.buckets
+			id := val.BucketID()
+			bucket := &Bucket{
+				bucket: id,
+				name:   val.Name,
+				idx:    art.New[int64](),
+			}
+			db.buckets.LoadOrStore(id, bucket)
 		} else if val.Header().IsDeleted() {
-
+			id := val.BucketID()
+			db.buckets.Delete(id)
 		}
 	}
 	return l, nil
@@ -447,22 +456,44 @@ func (db *DB) writeKvNodeTree(tree *art.Tree[*kvNode]) (int, error) {
 	l := 0
 	for _, val := range tree.Iter() {
 		if val.Header().IsNormal() {
+			pos := db.size.Load() // capture position before write
 			n, err := db.writeRR(val)
 			l += n
 			if err != nil {
 				return l, err
 			}
-		} else if val.Header().IsDeleted() {
-			bucket, found := db.buckets.Load(val.BucketID())
-			if !found {
-				return l, errors.New("bucket not found")
-			}
-			pos, found := bucket.idx.Get(val.key)
-			if found {
-				if err := db.updateStateWithPosition(pos, StateDeleted); err != nil {
-					return l, err
+			// Update bucket index with new position
+			bid := val.BucketID()
+			if bid == 0 {
+				db.bucket.idx.Put(val.key, pos)
+			} else {
+				bucket, found := db.buckets.Load(bid)
+				if found {
+					bucket.idx.Put(val.key, pos)
 				}
-				bucket.idx.Delete(val.key)
+			}
+		} else if val.Header().IsDeleted() {
+			bid := val.BucketID()
+			if bid == 0 {
+				pos, found := db.bucket.idx.Get(val.key)
+				if found {
+					if err := db.updateStateWithPosition(pos, StateDeleted); err != nil {
+						return l, err
+					}
+					db.bucket.idx.Delete(val.key)
+				}
+			} else {
+				bucket, found := db.buckets.Load(bid)
+				if !found {
+					return l, errors.New("bucket not found")
+				}
+				pos, found := bucket.idx.Get(val.key)
+				if found {
+					if err := db.updateStateWithPosition(pos, StateDeleted); err != nil {
+						return l, err
+					}
+					bucket.idx.Delete(val.key)
+				}
 			}
 		}
 	}
@@ -489,6 +520,10 @@ func (db *DB) Compact() error {
 	defer db.mu.Unlock()
 
 	tmpPath := db.path + ".compact"
+	// Remove any stale temp file from a previous crashed compaction
+	if err := os.Remove(tmpPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove stale compact file failed: %w", err)
+	}
 	defer os.Remove(tmpPath)
 
 	var size int64
@@ -496,7 +531,27 @@ func (db *DB) Compact() error {
 	if err != nil {
 		return fmt.Errorf("create bio failed: %w", err)
 	}
-	defer tmpIO.Close()
+	tmpIOClosed := false
+	defer func() {
+		if !tmpIOClosed {
+			tmpIO.Close()
+		}
+	}()
+
+	// writeToTmp writes data to the temp file with auto-expansion
+	writeToTmp := func(p []byte, off int64) (int, error) {
+		end := off + int64(len(p))
+		if end > tmpIO.Size() {
+			newSize := tmpIO.Size()
+			for newSize < end {
+				newSize += db.opts.incrementSize
+			}
+			if err := tmpIO.Truncate(newSize); err != nil {
+				return 0, err
+			}
+		}
+		return tmpIO.WriteAt(p, off)
+	}
 
 	var buckets []*Bucket
 	db.buckets.Range(func(id uint32, b *Bucket) bool {
@@ -519,7 +574,7 @@ func (db *DB) Compact() error {
 			return err
 		}
 
-		if _, err = tmpIO.WriteAt(buf.Bytes(), size); err != nil {
+		if _, err = writeToTmp(buf.Bytes(), size); err != nil {
 			bytebufferpool.Put(buf)
 			return err
 		}
@@ -545,7 +600,7 @@ func (db *DB) Compact() error {
 			if n != int(hdr.EntrySize()+HeaderSize) {
 				return fmt.Errorf("read data length mismatch: %d != %d", n, hdr.EntrySize()+HeaderSize)
 			}
-			if _, err = tmpIO.WriteAt(buf, size); err != nil {
+			if _, err = writeToTmp(buf, size); err != nil {
 				return err
 			}
 			size += int64(len(buf))
@@ -563,9 +618,23 @@ func (db *DB) Compact() error {
 		}
 	}
 
+	// Truncate temp file to actual data size to reclaim disk space.
+	// Skip truncation for size 0 — mmap cannot map an empty file.
+	if size > 0 {
+		if err = tmpIO.Truncate(size); err != nil {
+			return fmt.Errorf("truncate tmp file failed: %w", err)
+		}
+	}
+
 	if err = tmpIO.Sync(); err != nil {
 		return fmt.Errorf("sync tmp file failed: %w", err)
 	}
+
+	// Close tmpIO before renaming to release file handles
+	if err = tmpIO.Close(); err != nil {
+		return fmt.Errorf("close tmp file failed: %w", err)
+	}
+	tmpIOClosed = true
 
 	if err = db.io.Close(); err != nil {
 		return fmt.Errorf("close original file failed: %w", err)
