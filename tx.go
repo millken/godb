@@ -46,15 +46,26 @@ func (tx *Tx) CreateBucket(name []byte) (*Bucket, error) {
 // Bucket returns a bucket by name. if the bucket does not exist it will be
 // created and returned. The bucket is not persisted until the transaction
 func (tx *Tx) Bucket(name []byte) *Bucket {
-	b, found := tx.db.buckets.Load(bucketID(name))
+	id := bucketID(name)
+	b, found := tx.db.buckets.Load(id)
 	if found {
+		if tx.writable {
+			b.tx = tx
+		}
 		return b
+	}
+	if !tx.writable {
+		return &Bucket{
+			tx:     tx,
+			bucket: id,
+			idx:    art.New[int64](),
+		}
 	}
 	rr := newBucket(name)
 	tx.buckets.Put(name, rr)
 	return &Bucket{
 		tx:     tx,
-		bucket: bucketID(name),
+		bucket: id,
 		idx:    art.New[int64](),
 	}
 }
@@ -75,18 +86,15 @@ func (tx *Tx) DeleteBucket(name []byte) error {
 	if !tx.writable {
 		return ErrTxNotWritable
 	}
-	b, found := tx.db.buckets.Load(bucketID(name))
+	id := bucketID(name)
+	_, found := tx.db.buckets.Load(id)
 	if !found {
 		return ErrBucketNotFound
 	}
-	n, found := b.idx.Get(name)
-	if !found {
-		return ErrBucketNotFound
-	}
-	if err := tx.db.updateStateWithPosition(n, StateDeleted); err != nil {
-		return err
-	}
-	tx.buckets.Delete(name)
+	// Mark bucket as deleted in the transaction's bucket tree
+	rr := newBucket(name)
+	rr.Hdr.SetRecord(StateDeleted)
+	tx.buckets.Put(name, rr)
 	return nil
 }
 
@@ -94,35 +102,42 @@ func (tx *Tx) Commit() error {
 	if tx.db == nil {
 		return ErrTxClosed
 	} else if !tx.writable {
+		// Read-only transactions should use Rollback, not Commit.
+		// Unlock and clear the transaction to prevent deadlocks.
+		tx.unlock()
+		tx.db = nil
 		return ErrTxNotWritable
 	}
 	tx.size = tx.db.size.Load()
 	var (
 		err error
 	)
-	if (tx.buckets.Len() > 0) && tx.writable {
+	if tx.buckets.Len() > 0 {
 		_, err = tx.db.writeBucketNodeTree(tx.buckets)
 		if err != nil {
 			tx.rollback()
+			tx.unlock()
+			tx.db = nil
+			return err
 		}
 	}
-	if (tx.committed.Len() > 0) && tx.writable {
+	if tx.committed.Len() > 0 {
 		// If this operation fails then the write did failed and we must
 		// rollback.
 		_, err = tx.db.writeKvNodeTree(tx.committed)
 		if err != nil {
 			tx.rollback()
+			tx.unlock()
+			tx.db = nil
+			return err
 		}
 	}
 
-	// apply all commands
-	// err = tx.buildIndex(tx.committed)
+	err = tx.db.sync()
 	// Unlock the database and allow for another writable transaction.
 	tx.unlock()
-	// tx.db.size.Add(int64(size))
 	// Clear the db field to disable this transaction from future use.
 	tx.db = nil
-	// Update the size of the database.
 	return err
 }
 func (tx *Tx) Rollback() error {

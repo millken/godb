@@ -187,14 +187,14 @@ func (db *DB) Delete(key []byte) error {
 	if err := validateKey(key); err != nil {
 		return err
 	}
-	idx, ok := db.bucket.idx.Get(key)
-	if !ok {
-		return nil
-	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	if db.closed {
 		return ErrDatabaseNotOpen
+	}
+	idx, ok := db.bucket.idx.Get(key)
+	if !ok {
+		return nil
 	}
 	// 更新记录
 	if err := db.updateStateWithPosition(idx, StateDeleted); err != nil {
@@ -433,8 +433,19 @@ func (db *DB) writeBucketNodeTree(tree *art.Tree[*bucketNode]) (int, error) {
 			if err != nil {
 				return l, err
 			}
+			// Register the new bucket in db.buckets
+			id := val.BucketID()
+			if _, found := db.buckets.Load(id); !found {
+				bucket := &Bucket{
+					bucket: id,
+					name:   val.Name,
+					idx:    art.New[int64](),
+				}
+				db.buckets.Store(id, bucket)
+			}
 		} else if val.Header().IsDeleted() {
-
+			id := val.BucketID()
+			db.buckets.Delete(id)
 		}
 	}
 	return l, nil
@@ -447,22 +458,44 @@ func (db *DB) writeKvNodeTree(tree *art.Tree[*kvNode]) (int, error) {
 	l := 0
 	for _, val := range tree.Iter() {
 		if val.Header().IsNormal() {
+			pos := db.size.Load() // capture position before write
 			n, err := db.writeRR(val)
 			l += n
 			if err != nil {
 				return l, err
 			}
-		} else if val.Header().IsDeleted() {
-			bucket, found := db.buckets.Load(val.BucketID())
-			if !found {
-				return l, errors.New("bucket not found")
-			}
-			pos, found := bucket.idx.Get(val.key)
-			if found {
-				if err := db.updateStateWithPosition(pos, StateDeleted); err != nil {
-					return l, err
+			// Update bucket index with new position
+			bid := val.BucketID()
+			if bid == 0 {
+				db.bucket.idx.Put(val.key, pos)
+			} else {
+				bucket, found := db.buckets.Load(bid)
+				if found {
+					bucket.idx.Put(val.key, pos)
 				}
-				bucket.idx.Delete(val.key)
+			}
+		} else if val.Header().IsDeleted() {
+			bid := val.BucketID()
+			if bid == 0 {
+				pos, found := db.bucket.idx.Get(val.key)
+				if found {
+					if err := db.updateStateWithPosition(pos, StateDeleted); err != nil {
+						return l, err
+					}
+					db.bucket.idx.Delete(val.key)
+				}
+			} else {
+				bucket, found := db.buckets.Load(bid)
+				if !found {
+					return l, errors.New("bucket not found")
+				}
+				pos, found := bucket.idx.Get(val.key)
+				if found {
+					if err := db.updateStateWithPosition(pos, StateDeleted); err != nil {
+						return l, err
+					}
+					bucket.idx.Delete(val.key)
+				}
 			}
 		}
 	}
