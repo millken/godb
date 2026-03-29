@@ -521,7 +521,9 @@ func (db *DB) Compact() error {
 
 	tmpPath := db.path + ".compact"
 	// Remove any stale temp file from a previous crashed compaction
-	os.Remove(tmpPath)
+	if err := os.Remove(tmpPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove stale compact file failed: %w", err)
+	}
 	defer os.Remove(tmpPath)
 
 	var size int64
@@ -616,7 +618,8 @@ func (db *DB) Compact() error {
 		}
 	}
 
-	// Truncate temp file to actual data size to reclaim disk space
+	// Truncate temp file to actual data size to reclaim disk space.
+	// Skip truncation for size 0 — mmap cannot map an empty file.
 	if size > 0 {
 		if err = tmpIO.Truncate(size); err != nil {
 			return fmt.Errorf("truncate tmp file failed: %w", err)
