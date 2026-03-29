@@ -435,14 +435,12 @@ func (db *DB) writeBucketNodeTree(tree *art.Tree[*bucketNode]) (int, error) {
 			}
 			// Register the new bucket in db.buckets
 			id := val.BucketID()
-			if _, found := db.buckets.Load(id); !found {
-				bucket := &Bucket{
-					bucket: id,
-					name:   val.Name,
-					idx:    art.New[int64](),
-				}
-				db.buckets.Store(id, bucket)
+			bucket := &Bucket{
+				bucket: id,
+				name:   val.Name,
+				idx:    art.New[int64](),
 			}
+			db.buckets.LoadOrStore(id, bucket)
 		} else if val.Header().IsDeleted() {
 			id := val.BucketID()
 			db.buckets.Delete(id)
