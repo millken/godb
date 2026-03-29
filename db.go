@@ -520,6 +520,8 @@ func (db *DB) Compact() error {
 	defer db.mu.Unlock()
 
 	tmpPath := db.path + ".compact"
+	// Remove any stale temp file from a previous crashed compaction
+	os.Remove(tmpPath)
 	defer os.Remove(tmpPath)
 
 	var size int64
@@ -527,7 +529,27 @@ func (db *DB) Compact() error {
 	if err != nil {
 		return fmt.Errorf("create bio failed: %w", err)
 	}
-	defer tmpIO.Close()
+	tmpIOClosed := false
+	defer func() {
+		if !tmpIOClosed {
+			tmpIO.Close()
+		}
+	}()
+
+	// writeToTmp writes data to the temp file with auto-expansion
+	writeToTmp := func(p []byte, off int64) (int, error) {
+		end := off + int64(len(p))
+		if end > tmpIO.Size() {
+			newSize := tmpIO.Size()
+			for newSize < end {
+				newSize += db.opts.incrementSize
+			}
+			if err := tmpIO.Truncate(newSize); err != nil {
+				return 0, err
+			}
+		}
+		return tmpIO.WriteAt(p, off)
+	}
 
 	var buckets []*Bucket
 	db.buckets.Range(func(id uint32, b *Bucket) bool {
@@ -550,7 +572,7 @@ func (db *DB) Compact() error {
 			return err
 		}
 
-		if _, err = tmpIO.WriteAt(buf.Bytes(), size); err != nil {
+		if _, err = writeToTmp(buf.Bytes(), size); err != nil {
 			bytebufferpool.Put(buf)
 			return err
 		}
@@ -576,7 +598,7 @@ func (db *DB) Compact() error {
 			if n != int(hdr.EntrySize()+HeaderSize) {
 				return fmt.Errorf("read data length mismatch: %d != %d", n, hdr.EntrySize()+HeaderSize)
 			}
-			if _, err = tmpIO.WriteAt(buf, size); err != nil {
+			if _, err = writeToTmp(buf, size); err != nil {
 				return err
 			}
 			size += int64(len(buf))
@@ -594,9 +616,22 @@ func (db *DB) Compact() error {
 		}
 	}
 
+	// Truncate temp file to actual data size to reclaim disk space
+	if size > 0 {
+		if err = tmpIO.Truncate(size); err != nil {
+			return fmt.Errorf("truncate tmp file failed: %w", err)
+		}
+	}
+
 	if err = tmpIO.Sync(); err != nil {
 		return fmt.Errorf("sync tmp file failed: %w", err)
 	}
+
+	// Close tmpIO before renaming to release file handles
+	if err = tmpIO.Close(); err != nil {
+		return fmt.Errorf("close tmp file failed: %w", err)
+	}
+	tmpIOClosed = true
 
 	if err = db.io.Close(); err != nil {
 		return fmt.Errorf("close original file failed: %w", err)
